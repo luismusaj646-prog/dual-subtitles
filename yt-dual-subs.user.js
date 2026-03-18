@@ -51,7 +51,9 @@
     targetLang: 'zh-Hans',
     sourceTrackIndex: 0,
     panelOpen: true,
-    debug: CONFIG.defaultDebug
+    debug: CONFIG.defaultDebug,
+    launcherPosition: null,
+    panelPosition: null
   };
 
   var TEXT = {
@@ -97,6 +99,7 @@
     '.yds-panel label{display:block;margin-top:8px;}' +
     '.yds-row{display:flex;gap:6px;align-items:center;}' +
     '.yds-row>*{flex:1;}' +
+    '.yds-drag-handle{cursor:move;touch-action:none;}' +
     '.yds-toggle{display:flex;align-items:center;gap:8px;margin-top:10px;}' +
     '.yds-toggle input{flex:0 0 auto;}' +
     '.yds-status{margin-top:8px;font-size:11px;opacity:.9;white-space:pre-wrap;word-break:break-word;}' +
@@ -118,6 +121,10 @@
   var logger = createLogger(function () {
     return isDebugEnabled(state);
   });
+  var fetchDiagnostics = {
+    source: '',
+    target: ''
+  };
   var runtime = createRuntime();
 
   window[RUNTIME_KEY] = runtime;
@@ -211,6 +218,7 @@
 
       var titleRow = document.createElement('div');
       titleRow.className = 'yds-row';
+      titleRow.className += ' yds-drag-handle';
 
       var title = document.createElement('strong');
       title.textContent = TEXT.title;
@@ -285,6 +293,8 @@
       ui.debugBox.className = 'yds-debug';
       ui.panel.appendChild(ui.debugBox);
 
+      enableDragging(ui.launcher, ui.launcher, 'launcherPosition');
+      enableDragging(ui.panel, titleRow, 'panelPosition');
       syncUi();
     }
 
@@ -303,6 +313,8 @@
       } else if (ui.panel && ui.panel.isConnected) {
         ui.panel.remove();
       }
+      applyStoredPosition(ui.launcher, state.launcherPosition);
+      applyStoredPosition(ui.panel, state.panelPosition);
       syncUi();
     }
 
@@ -321,6 +333,70 @@
         ui.debugBox.hidden = !isDebugEnabled(state);
         ui.debugBox.textContent = formatDebugText();
       }
+    }
+
+    function applyStoredPosition(node, position) {
+      if (!node) return;
+      if (!position || typeof position.left !== 'number' || typeof position.top !== 'number') {
+        node.style.left = '';
+        node.style.top = '';
+        node.style.right = '';
+        node.style.bottom = '';
+        return;
+      }
+      node.style.left = position.left + 'px';
+      node.style.top = position.top + 'px';
+      node.style.right = 'auto';
+      node.style.bottom = 'auto';
+    }
+
+    function enableDragging(node, handle, stateKey) {
+      if (!node || !handle) return;
+
+      var drag = null;
+
+      function onPointerMove(event) {
+        if (!drag) return;
+        var nextLeft = clampToViewport(drag.startLeft + (event.clientX - drag.startX), node.offsetWidth, window.innerWidth);
+        var nextTop = clampToViewport(drag.startTop + (event.clientY - drag.startY), node.offsetHeight, window.innerHeight);
+        applyStoredPosition(node, { left: nextLeft, top: nextTop });
+      }
+
+      function onPointerUp() {
+        if (!drag) return;
+        state[stateKey] = {
+          left: parseFloat(node.style.left) || 0,
+          top: parseFloat(node.style.top) || 0
+        };
+        saveSettings(state);
+        drag = null;
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+        window.removeEventListener('pointercancel', onPointerUp);
+      }
+
+      handle.addEventListener('pointerdown', function (event) {
+        if (event.button != null && event.button !== 0) return;
+        if (isInteractiveTarget(event.target)) return;
+
+        var rect = node.getBoundingClientRect();
+        drag = {
+          startX: event.clientX,
+          startY: event.clientY,
+          startLeft: rect.left,
+          startTop: rect.top
+        };
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
+        window.addEventListener('pointercancel', onPointerUp);
+        event.preventDefault();
+      });
+
+      app.teardown.push(function () {
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+        window.removeEventListener('pointercancel', onPointerUp);
+      });
     }
 
     function setPhase(phase) {
@@ -345,6 +421,8 @@
         'source=' + (snapshot.source || '-'),
         'tracks=' + snapshot.tracks.length,
         'cues=' + snapshot.cuesA + '/' + snapshot.cuesB,
+        'fetch-source=' + (snapshot.fetch.source || '-'),
+        'fetch-target=' + (snapshot.fetch.target || '-'),
         'dom=video:' + snapshot.dom.video + ',player:' + snapshot.dom.player + ',captions:' + snapshot.dom.captionContainer,
         'injected=launcher:' + snapshot.dom.launcher + ',panel:' + snapshot.dom.panel + ',native:' + snapshot.dom.nativeWindow
       ].join('\n');
@@ -446,6 +524,7 @@
       app.lastSourceName = '';
       app.cuesA = [];
       app.cuesB = [];
+      clearFetchDiagnostics();
       app.tracks = [];
       app.trackRetryCount = 0;
       app.pendingLoadKey = '';
@@ -467,6 +546,7 @@
       app.lastSourceName = '';
       app.cuesA = [];
       app.cuesB = [];
+      clearFetchDiagnostics();
       app.tracks = [];
       app.trackRetryCount = 0;
       app.pendingLoadKey = '';
@@ -544,7 +624,14 @@
         app.lastSourceName = formatTrackLabel(selected.track, selected.index);
         syncUi();
 
-        return fetchBestPair(selected.track, state.targetLang).then(function (result) {
+        var targetTrack = findTrackByLanguage(tracks, state.targetLang, selected.index);
+        logger.debug('track pair', {
+          sourceLang: selected.track.languageCode || '',
+          targetLang: state.targetLang,
+          targetMode: targetTrack ? 'direct-track' : 'translated'
+        });
+
+        return fetchBestPair(selected.track, targetTrack, state.targetLang).then(function (result) {
           if (!isActiveRequest(requestId, videoId)) return;
 
           app.backoffUntil = 0;
@@ -672,6 +759,10 @@
           player: !!getPlayer(),
           video: !!getVideo()
         },
+        fetch: {
+          source: fetchDiagnostics.source,
+          target: fetchDiagnostics.target
+        },
         loading: app.loading,
         pageType: isWatchPage() ? 'watch' : 'other',
         phase: app.phase,
@@ -707,9 +798,28 @@
     GM_setValue(SETTINGS_KEY, {
       debug: !!nextState.debug,
       panelOpen: !!nextState.panelOpen,
+      launcherPosition: normalizePosition(nextState.launcherPosition),
+      panelPosition: normalizePosition(nextState.panelPosition),
       sourceTrackIndex: Math.max(0, parseInt(nextState.sourceTrackIndex || '0', 10) || 0),
       targetLang: String(nextState.targetLang || DEFAULTS.targetLang)
     });
+  }
+
+  function normalizePosition(position) {
+    if (!position || typeof position.left !== 'number' || typeof position.top !== 'number') return null;
+    return {
+      left: Math.max(0, Math.round(position.left)),
+      top: Math.max(0, Math.round(position.top))
+    };
+  }
+
+  function clearFetchDiagnostics() {
+    fetchDiagnostics.source = '';
+    fetchDiagnostics.target = '';
+  }
+
+  function setFetchDiagnostic(label, value) {
+    fetchDiagnostics[label] = value;
   }
 
   function createLogger(isEnabled) {
@@ -747,6 +857,17 @@
 
   function getPageWindow() {
     return typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+  }
+
+  function getPageFetch() {
+    var pageWindow = getPageWindow();
+    if (pageWindow && typeof pageWindow.fetch === 'function') {
+      return pageWindow.fetch.bind(pageWindow);
+    }
+    if (typeof fetch === 'function') {
+      return fetch.bind(window);
+    }
+    return null;
   }
 
   function getVideoId() {
@@ -893,6 +1014,18 @@
     return !!matcher && matcher.call(node, selector);
   }
 
+  function isInteractiveTarget(target) {
+    if (!target || typeof target.closest !== 'function') return false;
+    return !!target.closest('button,input,textarea,select,a,label');
+  }
+
+  function clampToViewport(value, size, max) {
+    var safeMax = Math.max(0, (max || 0) - (size || 0));
+    if (value < 0) return 0;
+    if (value > safeMax) return safeMax;
+    return value;
+  }
+
   function clampIndex(index, length) {
     if (!length) return 0;
     if (index < 0) return 0;
@@ -965,6 +1098,21 @@
       if (predicate(tracks[i], i)) return i;
     }
     return -1;
+  }
+
+  function findTrackByLanguage(tracks, languageCode, excludeIndex) {
+    if (!languageCode) return null;
+
+    var exactIndex = findTrackIndex(tracks, function (track, index) {
+      return index !== excludeIndex && getUsableTrack(track) && track.languageCode === languageCode;
+    });
+    if (exactIndex !== -1) return tracks[exactIndex];
+
+    var prefix = String(languageCode).split('-')[0];
+    var prefixIndex = findTrackIndex(tracks, function (track, index) {
+      return index !== excludeIndex && getUsableTrack(track) && String(track.languageCode || '').split('-')[0] === prefix;
+    });
+    return prefixIndex === -1 ? null : tracks[prefixIndex];
   }
 
   function getUsableTrack(track) {
@@ -1080,7 +1228,12 @@
 
   function postJson(url, body, headers) {
     var payload = JSON.stringify(body);
-    return fetch(url, {
+    var pageFetch = getPageFetch();
+    if (!pageFetch) {
+      return postJsonWithGM(url, payload, headers);
+    }
+
+    return pageFetch(url, {
       method: 'POST',
       body: payload,
       headers: headers,
@@ -1221,7 +1374,12 @@
   }
 
   function fetchText(url) {
-    return fetch(url, {
+    var pageFetch = getPageFetch();
+    if (!pageFetch) {
+      return httpGet(url);
+    }
+
+    return pageFetch(url, {
       credentials: 'include',
       cache: 'no-store'
     }).then(function (res) {
@@ -1234,34 +1392,71 @@
     });
   }
 
-  function fetchBestPair(track, targetLang) {
-    var baseVtt = buildTimedTextUrl(track.baseUrl, { fmt: 'vtt' });
-    var transVtt = buildTimedTextUrl(track.baseUrl, { fmt: 'vtt', tlang: targetLang });
-    var baseJson = buildTimedTextUrl(track.baseUrl, { fmt: 'json3' });
-    var transJson = buildTimedTextUrl(track.baseUrl, { fmt: 'json3', tlang: targetLang });
-    var baseRaw = buildTimedTextUrl(track.baseUrl, {});
-    var transRaw = buildTimedTextUrl(track.baseUrl, { tlang: targetLang });
-
-    function parsePair(baseText, transText) {
+  function fetchBestPair(sourceTrack, targetTrack, targetLang) {
+    clearFetchDiagnostics();
+    return Promise.all([
+      fetchTrackCues(sourceTrack, null, 'source'),
+      targetTrack ? fetchTrackCues(targetTrack, null, 'target') : fetchTrackCues(sourceTrack, targetLang, 'target')
+    ]).then(function (result) {
       return {
-        cuesA: parseCaptionPayload(baseText),
-        cuesB: parseCaptionPayload(transText)
+        cuesA: result[0] || [],
+        cuesB: result[1] || []
       };
+    });
+  }
+
+  function fetchTrackCues(track, targetLang, label) {
+    var candidates = [
+      buildTimedTextUrl(track.baseUrl, mergeTimedTextParams(targetLang, { fmt: 'vtt' })),
+      buildTimedTextUrl(track.baseUrl, mergeTimedTextParams(targetLang, { fmt: 'json3' })),
+      buildTimedTextUrl(track.baseUrl, mergeTimedTextParams(targetLang, {}))
+    ];
+    var attempts = [];
+
+    function summarizeUrl(url) {
+      try {
+        var parsed = new URL(url, location.href);
+        var fmt = parsed.searchParams.get('fmt') || 'raw';
+        var lang = parsed.searchParams.get('lang') || '';
+        var tlang = parsed.searchParams.get('tlang') || '';
+        return fmt + ':' + lang + (tlang ? '->' + tlang : '');
+      } catch (err) {
+        return 'unknown';
+      }
     }
 
-    return Promise.all([fetchText(baseVtt), fetchText(transVtt)]).then(function (res) {
-      var parsed = parsePair(res[0], res[1]);
-      if (parsed.cuesA.length || parsed.cuesB.length) return parsed;
-
-      return Promise.all([fetchText(baseJson), fetchText(transJson)]).then(function (next) {
-        parsed = parsePair(next[0], next[1]);
-        if (parsed.cuesA.length || parsed.cuesB.length) return parsed;
-
-        return Promise.all([fetchText(baseRaw), fetchText(transRaw)]).then(function (last) {
-          return parsePair(last[0], last[1]);
-        });
+    function tryAt(index) {
+      if (index >= candidates.length) {
+        setFetchDiagnostic(label, attempts.join(' | ') || 'no-attempt');
+        return Promise.resolve([]);
+      }
+      return fetchText(candidates[index]).then(function (text) {
+        var cues = parseCaptionPayload(text);
+        attempts.push(summarizeUrl(candidates[index]) + ':ok(' + cues.length + ')');
+        if (cues.length) {
+          setFetchDiagnostic(label, attempts.join(' | '));
+          return cues;
+        }
+        return tryAt(index + 1);
+      }).catch(function (err) {
+        attempts.push(summarizeUrl(candidates[index]) + ':err(' + formatError(err) + ')');
+        if (err && err.status === 429) {
+          setFetchDiagnostic(label, attempts.join(' | '));
+          throw err;
+        }
+        return tryAt(index + 1);
       });
-    });
+    }
+
+    return tryAt(0);
+  }
+
+  function mergeTimedTextParams(targetLang, extraParams) {
+    var params = {};
+    var key;
+    if (targetLang) params.tlang = targetLang;
+    for (key in extraParams) params[key] = extraParams[key];
+    return params;
   }
 
   function parseCaptionPayload(text) {
