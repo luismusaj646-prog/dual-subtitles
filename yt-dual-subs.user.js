@@ -634,24 +634,25 @@
         return fetchBestPair(selected.track, targetTrack, state.targetLang).then(function (result) {
           if (!isActiveRequest(requestId, videoId)) return;
 
-          app.backoffUntil = 0;
-          app.cuesA = result.cuesA || [];
-          app.cuesB = result.cuesB || [];
-
-          if (!app.cuesA.length && !app.cuesB.length) {
-            setPhase('no-cues');
-            setStatus(TEXT.noCue);
-            stopLoop();
-            return;
+          if (!result.cuesA.length && !result.cuesB.length && captionData.defaultTrackIndex > -1 && captionData.defaultTrackIndex !== selected.index && tracks[captionData.defaultTrackIndex] && tracks[captionData.defaultTrackIndex].baseUrl) {
+            var fallbackTrack = tracks[captionData.defaultTrackIndex];
+            logger.debug('retry with default caption track', {
+              from: selected.index,
+              to: captionData.defaultTrackIndex,
+              targetLang: state.targetLang
+            });
+            return fetchBestPair(fallbackTrack, null, state.targetLang).then(function (fallbackResult) {
+              if (!isActiveRequest(requestId, videoId)) return;
+              if (fallbackResult.cuesA.length || fallbackResult.cuesB.length) {
+                app.lastSourceName = formatTrackLabel(fallbackTrack, captionData.defaultTrackIndex) + ' [fallback]';
+                syncUi();
+                return applyLoadedCues(fallbackResult);
+              }
+              return applyLoadedCues(result);
+            });
           }
 
-          setPhase('ready');
-          if (!app.cuesB.length) {
-            setStatus(TEXT.sourceOnly);
-          } else {
-            setStatus(TEXT.nativeReady);
-          }
-          startLoop();
+          return applyLoadedCues(result);
         });
       }).catch(function (err) {
         if (!isActiveRequest(requestId, videoId)) return;
@@ -674,6 +675,29 @@
         app.loading = false;
         syncUi();
       });
+
+      function applyLoadedCues(result) {
+        if (!isActiveRequest(requestId, videoId)) return;
+
+        app.backoffUntil = 0;
+        app.cuesA = result.cuesA || [];
+        app.cuesB = result.cuesB || [];
+
+        if (!app.cuesA.length && !app.cuesB.length) {
+          setPhase('no-cues');
+          setStatus(TEXT.noCue);
+          stopLoop();
+          return;
+        }
+
+        setPhase('ready');
+        if (!app.cuesB.length) {
+          setStatus(TEXT.sourceOnly);
+        } else {
+          setStatus(TEXT.nativeReady);
+        }
+        startLoop();
+      }
     }
 
     function isRequestCurrent(requestId) {
@@ -868,6 +892,36 @@
       return fetch.bind(window);
     }
     return null;
+  }
+
+  function getBrowserLikeUserAgent() {
+    try {
+      return navigator && navigator.userAgent ? navigator.userAgent : 'Mozilla/5.0';
+    } catch (err) {
+      return 'Mozilla/5.0';
+    }
+  }
+
+  function buildInnertubeContext() {
+    return {
+      client: {
+        clientName: 'WEB',
+        clientVersion: getInnertubeClientVersion(),
+        hl: document.documentElement && document.documentElement.lang ? document.documentElement.lang : 'zh-CN',
+        visitorData: getInnertubeVisitorData()
+      }
+    };
+  }
+
+  function buildInnertubeHeaders() {
+    var headers = {
+      'Content-Type': 'application/json',
+      'X-YouTube-Client-Name': '1',
+      'X-YouTube-Client-Version': getInnertubeClientVersion()
+    };
+    var visitorData = getInnertubeVisitorData();
+    if (visitorData) headers['X-Goog-Visitor-Id'] = visitorData;
+    return headers;
   }
 
   function getVideoId() {
@@ -1151,11 +1205,21 @@
     return renderer && renderer.captionTracks ? renderer.captionTracks : [];
   }
 
+  function getDefaultCaptionTrackIndex(playerResponse) {
+    if (!playerResponse || !playerResponse.captions) return -1;
+    var renderer = playerResponse.captions.playerCaptionsTracklistRenderer;
+    var audioTracks = renderer && renderer.audioTracks ? renderer.audioTracks : [];
+    if (!audioTracks.length) return -1;
+    var index = audioTracks[0] && typeof audioTracks[0].defaultCaptionTrackIndex === 'number' ? audioTracks[0].defaultCaptionTrackIndex : -1;
+    return index;
+  }
+
   function getBestCaptionData(videoId) {
     var playerResponse = getPlayerResponse();
     var tracks = getCaptionTracks(playerResponse);
     if (tracks.length) {
       return Promise.resolve({
+        defaultTrackIndex: getDefaultCaptionTrackIndex(playerResponse),
         playerResponse: playerResponse,
         source: 'page',
         tracks: tracks
@@ -1164,6 +1228,7 @@
 
     return fetchPlayerResponseFromYoutubei(videoId).then(function (remoteResponse) {
       return {
+        defaultTrackIndex: getDefaultCaptionTrackIndex(remoteResponse),
         playerResponse: remoteResponse,
         source: 'youtubei',
         tracks: getCaptionTracks(remoteResponse)
@@ -1171,6 +1236,7 @@
     }).catch(function (err) {
       logger.error('youtubei player fallback failed', err);
       return {
+        defaultTrackIndex: getDefaultCaptionTrackIndex(playerResponse),
         playerResponse: playerResponse,
         source: 'page-fallback',
         tracks: tracks
@@ -1203,27 +1269,10 @@
   }
 
   function fetchPlayerResponseFromYoutubei(videoId) {
-    var clientVersion = getInnertubeClientVersion();
-    var visitorData = getInnertubeVisitorData();
-    var headers = {
-      'Content-Type': 'application/json',
-      'X-YouTube-Client-Name': '1',
-      'X-YouTube-Client-Version': clientVersion
-    };
-    if (visitorData) {
-      headers['X-Goog-Visitor-Id'] = visitorData;
-    }
-
     return postJson('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
-      context: {
-        client: {
-          clientName: 'WEB',
-          clientVersion: clientVersion,
-          hl: document.documentElement && document.documentElement.lang ? document.documentElement.lang : 'zh-CN'
-        }
-      },
+      context: buildInnertubeContext(),
       videoId: videoId
-    }, headers);
+    }, buildInnertubeHeaders());
   }
 
   function postJson(url, body, headers) {
@@ -1255,7 +1304,10 @@
         method: 'POST',
         url: url,
         data: payload,
-        headers: headers,
+        headers: mergeHeaders(headers, {
+          'Referer': 'https://www.youtube.com/',
+          'User-Agent': getBrowserLikeUserAgent()
+        }),
         onload: function (res) {
           if (res.status === 429) {
             reject(rateLimitError(url, 'gm'));
@@ -1350,11 +1402,25 @@
     return err;
   }
 
+  function mergeHeaders(baseHeaders, extraHeaders) {
+    var merged = {};
+    var key;
+    baseHeaders = baseHeaders || {};
+    extraHeaders = extraHeaders || {};
+    for (key in baseHeaders) merged[key] = baseHeaders[key];
+    for (key in extraHeaders) merged[key] = extraHeaders[key];
+    return merged;
+  }
+
   function httpGet(url) {
     return new Promise(function (resolve, reject) {
       GM_xmlhttpRequest({
         method: 'GET',
         url: url,
+        headers: {
+          'Referer': 'https://www.youtube.com/',
+          'User-Agent': getBrowserLikeUserAgent()
+        },
         onload: function (res) {
           if (res.status === 429) {
             reject(rateLimitError(url, 'gm'));
@@ -1398,6 +1464,29 @@
       fetchTrackCues(sourceTrack, null, 'source'),
       targetTrack ? fetchTrackCues(targetTrack, null, 'target') : fetchTrackCues(sourceTrack, targetLang, 'target')
     ]).then(function (result) {
+      if (!result[0].length && !result[1].length) {
+        return fetchTranscriptCues(getVideoId()).then(function (fallbackCues) {
+          if (fallbackCues.length) {
+            setFetchDiagnostic('source', (fetchDiagnostics.source ? fetchDiagnostics.source + ' | ' : '') + 'transcript:ok(' + fallbackCues.length + ')');
+            return {
+              cuesA: fallbackCues,
+              cuesB: []
+            };
+          }
+          setFetchDiagnostic('source', (fetchDiagnostics.source ? fetchDiagnostics.source + ' | ' : '') + 'transcript:empty');
+          return {
+            cuesA: result[0] || [],
+            cuesB: result[1] || []
+          };
+        }).catch(function (err) {
+          setFetchDiagnostic('source', (fetchDiagnostics.source ? fetchDiagnostics.source + ' | ' : '') + 'transcript:err(' + formatError(err) + ')');
+          return {
+            cuesA: result[0] || [],
+            cuesB: result[1] || []
+          };
+        });
+      }
+
       return {
         cuesA: result[0] || [],
         cuesB: result[1] || []
@@ -1407,8 +1496,11 @@
 
   function fetchTrackCues(track, targetLang, label) {
     var candidates = [
-      buildTimedTextUrl(track.baseUrl, mergeTimedTextParams(targetLang, { fmt: 'vtt' })),
       buildTimedTextUrl(track.baseUrl, mergeTimedTextParams(targetLang, { fmt: 'json3' })),
+      buildTimedTextUrl(track.baseUrl, mergeTimedTextParams(targetLang, { fmt: 'srv1' })),
+      buildTimedTextUrl(track.baseUrl, mergeTimedTextParams(targetLang, { fmt: 'srv3' })),
+      buildTimedTextUrl(track.baseUrl, mergeTimedTextParams(targetLang, { fmt: 'ttml' })),
+      buildTimedTextUrl(track.baseUrl, mergeTimedTextParams(targetLang, { fmt: 'vtt' })),
       buildTimedTextUrl(track.baseUrl, mergeTimedTextParams(targetLang, {}))
     ];
     var attempts = [];
@@ -1425,6 +1517,12 @@
       }
     }
 
+    function summarizeText(text) {
+      var compact = String(text || '').replace(/\s+/g, ' ').trim();
+      if (!compact) return 'empty';
+      return compact.slice(0, 48);
+    }
+
     function tryAt(index) {
       if (index >= candidates.length) {
         setFetchDiagnostic(label, attempts.join(' | ') || 'no-attempt');
@@ -1432,7 +1530,7 @@
       }
       return fetchText(candidates[index]).then(function (text) {
         var cues = parseCaptionPayload(text);
-        attempts.push(summarizeUrl(candidates[index]) + ':ok(' + cues.length + ')');
+        attempts.push(summarizeUrl(candidates[index]) + ':ok(' + cues.length + ',' + summarizeText(text) + ')');
         if (cues.length) {
           setFetchDiagnostic(label, attempts.join(' | '));
           return cues;
@@ -1457,6 +1555,77 @@
     if (targetLang) params.tlang = targetLang;
     for (key in extraParams) params[key] = extraParams[key];
     return params;
+  }
+
+  function fetchTranscriptCues(videoId) {
+    return fetchTranscriptResponse(videoId).then(function (response) {
+      return parseTranscriptResponse(response);
+    });
+  }
+
+  function fetchTranscriptResponse(videoId) {
+    return postJson('https://www.youtube.com/youtubei/v1/next?prettyPrint=false', {
+      context: buildInnertubeContext(),
+      videoId: videoId
+    }, buildInnertubeHeaders()).then(function (nextResponse) {
+      var endpoint = findNestedByKey(nextResponse, 'getTranscriptEndpoint');
+      if (!endpoint || !endpoint.params) {
+        throw new Error('Transcript endpoint not found');
+      }
+
+      return postJson('https://www.youtube.com/youtubei/v1/get_transcript?prettyPrint=false', {
+        context: buildInnertubeContext(),
+        params: endpoint.params
+      }, buildInnertubeHeaders());
+    });
+  }
+
+  function parseTranscriptResponse(response) {
+    var listRenderer = findNestedByKey(response, 'transcriptSegmentListRenderer');
+    var segments = listRenderer && listRenderer.initialSegments ? listRenderer.initialSegments : [];
+    var cues = [];
+    var i;
+
+    for (i = 0; i < segments.length; i++) {
+      var item = segments[i] && segments[i].transcriptSegmentRenderer;
+      if (!item) continue;
+
+      var startMs = parseInt(item.startMs || '0', 10);
+      var endMs = parseInt(item.endMs || '0', 10);
+      var text = readRunsText(item.snippet && item.snippet.runs);
+      if (!text) continue;
+
+      cues.push({
+        start: startMs / 1000,
+        end: (endMs || startMs) / 1000,
+        text: text
+      });
+    }
+
+    return cues;
+  }
+
+  function readRunsText(runs) {
+    if (!runs || !runs.length) return '';
+    var parts = [];
+    var i;
+    for (i = 0; i < runs.length; i++) {
+      if (runs[i] && runs[i].text) parts.push(runs[i].text);
+    }
+    return parts.join('').replace(/\s+/g, ' ').trim();
+  }
+
+  function findNestedByKey(value, key) {
+    if (!value || typeof value !== 'object') return null;
+    if (Object.prototype.hasOwnProperty.call(value, key)) return value[key];
+
+    var prop;
+    for (prop in value) {
+      if (!Object.prototype.hasOwnProperty.call(value, prop)) continue;
+      var nested = findNestedByKey(value[prop], key);
+      if (nested) return nested;
+    }
+    return null;
   }
 
   function parseCaptionPayload(text) {
