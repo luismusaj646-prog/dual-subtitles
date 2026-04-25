@@ -88,26 +88,3 @@ npm run test:tampermonkey -- "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
 
 更多测试说明见 [docs/testing.md](docs/testing.md)。
-
-## 更新发布
-
-GreasyFork 已设置从 GitHub raw 同步原始码：
-
-https://raw.githubusercontent.com/luismusaj646-prog/dual-subtitles/master/yt-dual-subs.user.js
-
-更新步骤：
-
-1. 修改 `yt-dual-subs.user.js`。
-2. 同步更新版本号：`@version`、`SCRIPT_VERSION`、`package.json`、`package-lock.json`。
-3. 运行 `npm test`。
-4. commit 并 push 到 GitHub `master`。
-5. GreasyFork 会自动检查同步；需要立即同步时，在 GreasyFork 脚本页进入 `管理`，点击 `更新設定並同步腳本`。
-
-发布前检查：
-
-- `yt-dual-subs.user.js` 的 `@version` 和 `SCRIPT_VERSION` 一致。
-- `package.json`、`package-lock.json` 版本一致。
-- 许可证为 `GPL-3.0-only`。
-- `npm run test:syntax` 通过。
-- `npm run test:e2e` 通过。
-- 用 Tampermonkey 在真实 YouTube 页面做一次手动验证。
