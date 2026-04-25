@@ -1,0 +1,26 @@
+{
+  "name": "youtube-dual-native-subs",
+  "private": true,
+  "version": "4.1.0",
+  "description": "YouTube dual native subtitles userscript.",
+  "license": "GPL-3.0-only",
+  "homepage": "https://github.com/luismusaj646-prog/dual-subtitles",
+  "bugs": {
+    "url": "https://github.com/luismusaj646-prog/dual-subtitles/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luismusaj646-prog/dual-subtitles.git"
+  },
+  "scripts": {
+    "test": "npm run test:syntax && npm run test:e2e",
+    "test:syntax": "node --check yt-dual-subs.user.js",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "diagnose": "node scripts/diagnose-youtube.js",
+    "test:tampermonkey": "node scripts/tampermonkey-smoke.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1"
+  }
+}

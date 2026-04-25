@@ -1,0 +1,7 @@
+node_modules/
+.tmp/
+playwright-report/
+test-results/
+diagnostics/*.json
+diagnostics/*.png
+npm-debug.log*
