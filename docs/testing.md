@@ -6,9 +6,12 @@
 
 ```powershell
 npm install
+npm run check:version
+npm run check:build
 npm test
 npm run test:e2e
 npm run test:e2e:headed
+npm run test:real
 npm run diagnose -- "https://www.youtube.com/watch?v=VIDEO_ID"
 npm run test:tampermonkey -- "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
@@ -28,10 +31,26 @@ npm run test:tampermonkey -- "https://www.youtube.com/watch?v=VIDEO_ID"
 - debug 面板默认折叠在“高级”区域
 - 显示模式支持“原文+译文 / 只显示原文 / 只显示译文”
 - 目标语言支持搜索过滤，并按源语言记忆上次选择
-- 字幕默认自动避让播放器控制栏，并默认跟随 YouTube 原生字幕样式
+- 首次安装会按浏览器语言推断目标语言
+- 切回已加载过的视频、原字幕轨和目标语言时会复用短期 cue cache
+- 字幕渲染会减少重复 DOM 写入，并对很短的 cue 间隙做平滑保持
+- 译文请求被 YouTube 限流时保留原文、显示倒计时并自动重试
+- 快捷键支持 `Alt+X` 开关、`Alt+D` 切换显示模式、`Alt+R` 重载
+- 字幕默认自动避让播放器控制栏，并固定使用脚本内的字体、字号和颜色设置
 - UI 有强制深色模式覆盖，Tampermonkey 烟测会记录 light/dark 样式和截图
 - watch 页面没有字幕轨时进入等待状态
 - 非 watch 页面保留 debug API，但卸载脚本 UI
+
+## 构建与版本检查
+
+开发时编辑 `src/yt-dual-subs.user.js`，再用 `npm run build` 同步生成根目录的 `yt-dual-subs.user.js`。`npm run check:build` 会确认两者一致。
+
+`npm run check:version` 会确认这些版本号一致：
+
+- `package.json` 的 `version`
+- `yt-dual-subs.user.js` 的 `@version`
+- `yt-dual-subs.user.js` 的 `SCRIPT_VERSION`
+- `README.md` 的当前版本
 
 ## 验收点
 
@@ -42,7 +61,7 @@ npm run test:tampermonkey -- "https://www.youtube.com/watch?v=VIDEO_ID"
 - 打开面板后 UI 跟随 YouTube 浅色/深色主题
 - 第一行必须是原字幕轨，第二行必须是同一原轨的 YouTube `tlang` 自动翻译
 - `显示模式` 切换只影响渲染，不改变已抓到的 cue
-- `跟随 YouTube 样式` 和 `自动避让控制栏` 是固定默认行为，没有 UI 开关
+- `自动避让控制栏` 是固定默认行为，没有 UI 开关；双字幕样式保持稳定，不再跟随 YouTube 原生字幕动态变化
 
 ## 单视频诊断
 
@@ -57,13 +76,21 @@ npm run diagnose -- "https://www.youtube.com/watch?v=GnE1gY_TqGo"
 真实 YouTube 测试默认跳过，因为它受网络、地区、同意弹窗和 YouTube DOM 变化影响。
 
 ```powershell
-$env:YDS_REAL_YOUTUBE = '1'
-npm run test:e2e -- tests/e2e/real-youtube.spec.js --headed
+npm run test:real -- --headed
 ```
 
 ## 真实 Tampermonkey 冒烟测试
 
 `test:tampermonkey` 会启动 Playwright Chromium，加载本机 Chrome Profile 1 里的 Tampermonkey 和 uBlock Origin Lite，开启 Chrome 的“允许运行用户脚本”，把当前 `yt-dual-subs.user.js` 安装进 Tampermonkey，再打开真实 YouTube 页面截图。报告和截图写入 `diagnostics/`。
+
+如果 Tampermonkey 或 uBlock Origin Lite 没安装在 Chrome `Profile 1`，可以用这些环境变量指定位置：
+
+- `YDS_CHROME_PROFILE`：Chrome profile 名称，例如 `Default` 或 `Profile 2`
+- `YDS_CHROME_USER_DATA`：Chrome `User Data` 根目录
+- `YDS_TAMPERMONKEY_PATH`：Tampermonkey 扩展目录
+- `YDS_UBLOCK_PATH`：uBlock Origin Lite 扩展目录
+
+真实 YouTube smoke 会把 `yds-real-snapshot.json` 附到 Playwright 报告里，里面包含 `phase`、`tracks`、`cuesA/cuesB`、`fetch` 和 DOM 状态，方便区分 YouTube 限流、无字幕和脚本注入失败。
 
 ```powershell
 npm run test:tampermonkey -- "https://www.youtube.com/watch?v=eIho2S0ZahI&hl=en&cc_lang_pref=en&cc_load_policy=1"
@@ -80,9 +107,8 @@ npm run test:tampermonkey -- "https://www.youtube.com/watch?v=VIDEO_ID"
 指定视频：
 
 ```powershell
-$env:YDS_REAL_YOUTUBE = '1'
 $env:YDS_REAL_URL = 'https://www.youtube.com/watch?v=VIDEO_ID&ydsDebug=1'
-npm run test:e2e -- tests/e2e/real-youtube.spec.js --headed
+npm run test:real -- --headed
 ```
 
 ## 浏览器 Debug API

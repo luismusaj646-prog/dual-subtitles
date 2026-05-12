@@ -38,6 +38,15 @@ function emptyJson3() {
   });
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function setupMockWatch(page, options = {}) {
   const videoId = options.videoId || 'mock-video';
   const tracks = options.tracks || [];
@@ -50,6 +59,15 @@ async function setupMockWatch(page, options = {}) {
       body: buildWatchHtml({
         defaultTrackIndex,
         nativeTimedTextHintUrl: buildNativeTimedTextHintUrl(tracks, options.nativeTimedTextHintParams),
+        nativeTimedTextHintAutoRequest: options.nativeTimedTextHintAutoRequest !== false,
+        allowNativeHintWait: !!options.allowNativeHintWait,
+        playerCaptionApi: options.playerCaptionApi === undefined ? true : options.playerCaptionApi,
+        playerCaptionTracklist: options.playerCaptionTracklist,
+        nativeCaptionText: options.nativeCaptionText,
+        nativeMenuSummaryText: options.nativeMenuSummaryText,
+        nativeMenuTranslatedText: options.nativeMenuTranslatedText,
+        subtitleIgnoreFirstClick: !!options.subtitleIgnoreFirstClick,
+        subtitleToggleDelayMs: options.subtitleToggleDelayMs || 0,
         tracks,
         translationLanguages: options.translationLanguages || [],
         transcriptUiSegments: options.transcriptUiSegments || [],
@@ -61,6 +79,23 @@ async function setupMockWatch(page, options = {}) {
   await page.route('https://www.youtube.com/api/timedtext**', async (route) => {
     const url = new URL(route.request().url());
     const result = options.timedText ? await options.timedText(url, route.request()) : emptyJson3();
+    const response = typeof result === 'object' && result && Object.prototype.hasOwnProperty.call(result, 'body')
+      ? result
+      : {
+          body: result
+        };
+    await route.fulfill({
+      status: response.status || 200,
+      contentType: response.contentType || 'application/json; charset=utf-8',
+      body: response.body
+    });
+  });
+
+  await page.route('https://translate.googleapis.com/translate_a/single**', async (route) => {
+    const url = new URL(route.request().url());
+    const result = options.machineTranslate
+      ? await options.machineTranslate(url, route.request())
+      : JSON.stringify([[[url.searchParams.get('q') || '', url.searchParams.get('q') || '']]]);
     const response = typeof result === 'object' && result && Object.prototype.hasOwnProperty.call(result, 'body')
       ? result
       : {
@@ -163,6 +198,11 @@ async function setupMockWatch(page, options = {}) {
   await page.goto(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&ydsDebug=1`, {
     waitUntil: 'domcontentloaded'
   });
+  if (options.settings) {
+    await page.evaluate((settings) => {
+      window.localStorage.setItem('__yds_gm__yds_native_settings_v2', JSON.stringify(settings));
+    }, options.settings);
+  }
   await injectUserscript(page);
 }
 
@@ -204,14 +244,22 @@ async function snapshot(page) {
   return page.evaluate(() => window.__ydsDebug && window.__ydsDebug.snapshot());
 }
 
-function buildWatchHtml({ defaultTrackIndex, nativeTimedTextHintUrl, tracks, translationLanguages, transcriptUiSegments, videoId }) {
+function buildWatchHtml({ allowNativeHintWait, defaultTrackIndex, nativeCaptionText, nativeMenuSummaryText, nativeMenuTranslatedText, nativeTimedTextHintAutoRequest, nativeTimedTextHintUrl, playerCaptionApi, playerCaptionTracklist, subtitleIgnoreFirstClick, subtitleToggleDelayMs, tracks, translationLanguages, transcriptUiSegments, videoId }) {
   const playerResponse = JSON.stringify(buildPlayerResponse({
     defaultTrackIndex,
     tracks,
     translationLanguages
   })).replace(/</g, '\\u003c');
   const transcriptUiSegmentsJson = JSON.stringify(transcriptUiSegments || []).replace(/</g, '\\u003c');
+  const playerCaptionApiJson = JSON.stringify(playerCaptionApi).replace(/</g, '\\u003c');
+  const mockPlayerCaptionTracklist = playerCaptionTracklist === undefined ? (tracks || []).map(toPlayerCaptionTrack) : playerCaptionTracklist;
+  const playerCaptionTracklistJson = JSON.stringify(mockPlayerCaptionTracklist || []).replace(/</g, '\\u003c');
+  const translationLanguagesJson = JSON.stringify(translationLanguages || []).replace(/</g, '\\u003c');
+  const nativeTimedTextHintAutoRequestJson = JSON.stringify(nativeTimedTextHintAutoRequest !== false);
   const nativeTimedTextHintUrlJson = JSON.stringify(nativeTimedTextHintUrl || '').replace(/</g, '\\u003c');
+  const nativeCaptionTextHtml = escapeHtml(nativeCaptionText === undefined ? '' : nativeCaptionText);
+  const nativeMenuSummaryTextJson = JSON.stringify(nativeMenuSummaryText || 'Subtitles/CC').replace(/</g, '\\u003c');
+  const nativeMenuTranslatedTextJson = JSON.stringify(nativeMenuTranslatedText || '').replace(/</g, '\\u003c');
 
   return `<!doctype html>
 <html lang="en">
@@ -220,6 +268,13 @@ function buildWatchHtml({ defaultTrackIndex, nativeTimedTextHintUrl, tracks, tra
     <title>Mock YouTube Watch</title>
     <script>
       window.__mockCurrentTime = 1;
+      window.__mockVideoPlayCalls = 0;
+      window.__mockVideoPauseCalls = 0;
+      window.__mockSubtitleButtonClicks = 0;
+      window.__mockSubtitlesEnabled = false;
+      window.__mockSubtitleIgnoreFirstClick = ${JSON.stringify(!!subtitleIgnoreFirstClick)};
+      window.__mockSubtitleToggleDelayMs = ${Number(subtitleToggleDelayMs) || 0};
+      window.__ydsHarnessAllowNativeHintWait = ${JSON.stringify(!!allowNativeHintWait)};
       window.ytcfg = {
         get: function (key) {
           if (key === 'INNERTUBE_CLIENT_VERSION' || key === 'INNERTUBE_CONTEXT_CLIENT_VERSION') return '2.20250312.04.00';
@@ -238,6 +293,13 @@ function buildWatchHtml({ defaultTrackIndex, nativeTimedTextHintUrl, tracks, tra
             window.__mockCurrentTime = Number(value) || 0;
           }
         });
+        HTMLMediaElement.prototype.play = function () {
+          window.__mockVideoPlayCalls += 1;
+          return Promise.resolve();
+        };
+        HTMLMediaElement.prototype.pause = function () {
+          window.__mockVideoPauseCalls += 1;
+        };
       } catch (err) {}
     </script>
   </head>
@@ -246,11 +308,12 @@ function buildWatchHtml({ defaultTrackIndex, nativeTimedTextHintUrl, tracks, tra
       <div id="page-manager">
         <div class="html5-video-player">
           <video></video>
-          <button class="ytp-subtitles-button" aria-pressed="false" onclick="this.setAttribute('aria-pressed', 'true'); if (window.__mockNativeTimedTextHintUrl && !window.__mockNativeTimedTextHintRequested) { window.__mockNativeTimedTextHintRequested = true; fetch(window.__mockNativeTimedTextHintUrl).catch(function () {}); }"></button>
+          <button class="ytp-subtitles-button" aria-pressed="false" onclick="window.__mockSubtitleButtonClicks += 1; if (window.__mockSubtitleIgnoreFirstClick && window.__mockSubtitleButtonClicks === 1) return; window.__mockSubtitlesEnabled = !window.__mockSubtitlesEnabled; var button = this; var enabled = window.__mockSubtitlesEnabled; window.setTimeout(function () { button.setAttribute('aria-pressed', enabled ? 'true' : 'false'); if (enabled && window.__mockNativeTimedTextHintUrl && !window.__mockNativeTimedTextHintRequested) { window.__mockNativeTimedTextHintRequested = true; fetch(window.__mockNativeTimedTextHintUrl).catch(function () {}); } }, window.__mockSubtitleToggleDelayMs || 0);"></button>
+          <button class="ytp-settings-button" type="button"></button>
           <div class="ytp-chrome-bottom" style="height:52px"></div>
           <div class="ytp-caption-window-container">
             <div class="caption-window">
-              <span class="ytp-caption-segment" style="font-size:34px;font-family:Arial;background-color:rgba(8,8,8,.75);color:rgb(255,255,0)">native caption placeholder</span>
+              <span class="ytp-caption-segment" style="font-size:34px;font-family:Arial;background-color:rgba(8,8,8,.75);color:rgb(255,255,0)">${nativeCaptionTextHtml}</span>
             </div>
           </div>
         </div>
@@ -265,7 +328,178 @@ function buildWatchHtml({ defaultTrackIndex, nativeTimedTextHintUrl, tracks, tra
     <button id="mock-transcript-trigger" aria-label="Show transcript" type="button">Show transcript</button>
     <script>
       window.__mockTranscriptUiSegments = ${transcriptUiSegmentsJson};
+      window.__mockCaptionApiCalls = [];
+      window.__mockCaptionApiConfig = ${playerCaptionApiJson};
+      window.__mockCaptionTrack = null;
+      window.__mockCaptionTranslationLanguage = null;
+      window.__mockCaptionTracklist = ${playerCaptionTracklistJson};
+      window.__mockTranslationLanguages = ${translationLanguagesJson};
+      window.__mockMenuTriggerCalls = [];
+      window.__mockNativeMenuSummaryText = ${nativeMenuSummaryTextJson};
+      window.__mockNativeMenuTranslatedText = ${nativeMenuTranslatedTextJson};
       window.__mockNativeTimedTextHintUrl = ${nativeTimedTextHintUrlJson};
+      window.__mockNativeTimedTextHintAutoRequest = ${nativeTimedTextHintAutoRequestJson};
+      window.__requestMockNativeTimedTextHint = function () {
+        if (!window.__mockNativeTimedTextHintUrl || window.__mockNativeTimedTextHintRequested) return;
+        window.__mockNativeTimedTextHintRequested = true;
+        fetch(window.__mockNativeTimedTextHintUrl).catch(function () {});
+      };
+      (function () {
+        var player = document.querySelector('.html5-video-player');
+        if (!player) return;
+        var settingsButton = document.querySelector('.ytp-settings-button');
+        var captionSegment = document.querySelector('.ytp-caption-segment');
+        function clearMockMenu() {
+          var existing = player.querySelector('.ytp-popup.ytp-settings-menu');
+          if (existing) existing.remove();
+        }
+        function createMockMenu(items) {
+          clearMockMenu();
+          var popup = document.createElement('div');
+          popup.className = 'ytp-popup ytp-settings-menu';
+          var panel = document.createElement('div');
+          panel.className = 'ytp-panel';
+          var menu = document.createElement('div');
+          menu.className = 'ytp-panel-menu';
+          items.forEach(function (item) {
+            var node = document.createElement('div');
+            node.className = 'ytp-menuitem';
+            node.setAttribute('role', 'menuitem');
+            var label = document.createElement('div');
+            label.className = 'ytp-menuitem-label';
+            label.textContent = item.label;
+            node.appendChild(label);
+            node.addEventListener('click', item.click);
+            menu.appendChild(node);
+          });
+          panel.appendChild(menu);
+          popup.appendChild(panel);
+          player.appendChild(popup);
+        }
+        function openMockSettingsMenu() {
+          window.__mockMenuTriggerCalls.push(['settings']);
+          createMockMenu([
+            { label: 'Stable volume', click: function () {} },
+            {
+              label: window.__mockNativeMenuSummaryText,
+              click: function () {
+                window.__mockMenuTriggerCalls.push(['subtitles']);
+                openMockSubtitlesMenu();
+              }
+            },
+            { label: 'Sleep timer Off', click: function () {} }
+          ]);
+        }
+        function openMockSubtitlesMenu() {
+          var sourceLabel = window.__mockCaptionTracklist[0] && (window.__mockCaptionTracklist[0].displayName || window.__mockCaptionTracklist[0].languageName) || 'English';
+          createMockMenu([
+            {
+              label: 'Off',
+              click: function () {
+                window.__mockMenuTriggerCalls.push(['off']);
+                window.__mockSubtitlesEnabled = false;
+                var button = document.querySelector('.ytp-subtitles-button');
+                if (button) button.setAttribute('aria-pressed', 'false');
+                if (captionSegment) captionSegment.textContent = '';
+                clearMockMenu();
+              }
+            },
+            {
+              label: sourceLabel,
+              click: function () {
+                window.__mockMenuTriggerCalls.push(['source']);
+                window.__mockSubtitlesEnabled = true;
+                var button = document.querySelector('.ytp-subtitles-button');
+                if (button) button.setAttribute('aria-pressed', 'true');
+                clearMockMenu();
+              }
+            },
+            {
+              label: 'Auto-translate',
+              click: function () {
+                window.__mockMenuTriggerCalls.push(['auto-translate']);
+                openMockLanguageMenu();
+              }
+            }
+          ]);
+        }
+        function openMockLanguageMenu() {
+          createMockMenu(window.__mockTranslationLanguages.map(function (language) {
+            return {
+              label: language.languageName || language.languageCode,
+              click: function () {
+                window.__mockMenuTriggerCalls.push(['target', language.languageCode]);
+                window.__mockSubtitlesEnabled = true;
+                var button = document.querySelector('.ytp-subtitles-button');
+                if (button) button.setAttribute('aria-pressed', 'true');
+                if (captionSegment && window.__mockNativeMenuTranslatedText) {
+                  captionSegment.textContent = window.__mockNativeMenuTranslatedText;
+                }
+                clearMockMenu();
+              }
+            };
+          }));
+        }
+        if (settingsButton) {
+          settingsButton.addEventListener('click', openMockSettingsMenu);
+        }
+        document.addEventListener('keydown', function (event) {
+          if (event.key === 'Escape') clearMockMenu();
+        });
+        if (window.__mockCaptionApiConfig === false) return;
+        var apiConfig = window.__mockCaptionApiConfig && typeof window.__mockCaptionApiConfig === 'object' ? window.__mockCaptionApiConfig : {};
+        player.loadModule = function (name) {
+          if (apiConfig.loadModuleThrows) throw new Error('mock loadModule failure');
+          window.__mockCaptionApiCalls.push(['loadModule', name]);
+        };
+        player.getOptions = function (module) {
+          if (apiConfig.getOptionsThrows) throw new Error('mock getOptions failure');
+          if (module !== 'captions') return [];
+          return ['reload', 'fontSize', 'track', 'tracklist', 'translationLanguages', 'sampleSubtitle', 'stickyLoading'];
+        };
+        player.getOption = function (module, key) {
+          if (apiConfig.getOptionThrows) throw new Error('mock getOption failure');
+          if (module !== 'captions') return null;
+          if (key === 'tracklist') return window.__mockCaptionTracklist;
+          if (key === 'translationLanguages') return window.__mockTranslationLanguages;
+          if (key === 'track') return window.__mockCaptionTrack || window.__mockCaptionTracklist[0] || null;
+          return null;
+        };
+        player.isSubtitlesOn = function () {
+          if (apiConfig.isSubtitlesOnThrows) throw new Error('mock isSubtitlesOn failure');
+          return !!window.__mockSubtitlesEnabled;
+        };
+        player.toggleSubtitlesOn = function () {
+          if (apiConfig.toggleSubtitlesOnThrows) throw new Error('mock toggleSubtitlesOn failure');
+          window.__mockCaptionApiCalls.push(['toggleSubtitlesOn']);
+          window.__mockSubtitlesEnabled = true;
+          var button = document.querySelector('.ytp-subtitles-button');
+          if (button) button.setAttribute('aria-pressed', 'true');
+          window.__requestMockNativeTimedTextHint();
+        };
+        player.setOption = function (module, key, value) {
+          if (apiConfig.setOptionThrows) throw new Error('mock setOption failure');
+          window.__mockCaptionApiCalls.push(['setOption', module, key, value || null]);
+          if (module === 'captions' && key === 'track') {
+            window.__mockCaptionTrack = value || null;
+            var button = document.querySelector('.ytp-subtitles-button');
+            if (button) button.setAttribute('aria-pressed', 'true');
+            window.__requestMockNativeTimedTextHint();
+          }
+          if (module === 'captions' && key === 'translationLanguage') {
+            window.__mockCaptionTranslationLanguage = value || null;
+            window.__requestMockNativeTimedTextHint();
+          }
+          if (module === 'captions' && key === 'reload') {
+            window.__requestMockNativeTimedTextHint();
+          }
+        };
+      })();
+      if (window.__mockNativeTimedTextHintUrl && window.__mockNativeTimedTextHintAutoRequest) {
+        requestAnimationFrame(function () {
+          window.__requestMockNativeTimedTextHint();
+        });
+      }
       window.__setMockTime = function (time) {
         window.__mockCurrentTime = time;
       };
@@ -316,6 +550,23 @@ function buildNativeTimedTextHintUrl(tracks, params) {
     else url.searchParams.set(key, String(value));
   }
   return url.toString();
+}
+
+function toPlayerCaptionTrack(track) {
+  const name = track && track.name && track.name.simpleText ? track.name.simpleText : (track && track.languageCode) || 'track';
+  const languageCode = track && track.languageCode ? track.languageCode : '';
+  return {
+    languageCode,
+    languageName: name,
+    displayName: name,
+    kind: track && track.kind ? track.kind : '',
+    name: track && track.name ? track.name : '',
+    id: track && track.id ? track.id : null,
+    is_servable: false,
+    is_default: false,
+    is_translateable: true,
+    vss_id: track && (track.vssId || track.vss_id) ? (track.vssId || track.vss_id) : `.${languageCode}`
+  };
 }
 
 function buildPlayerResponse({ defaultTrackIndex, tracks, translationLanguages = [] }) {

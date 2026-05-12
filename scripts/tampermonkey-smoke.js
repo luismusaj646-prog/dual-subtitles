@@ -5,16 +5,15 @@ const { chromium } = require('@playwright/test');
 const projectRoot = path.resolve(__dirname, '..');
 const extensionId = 'dhdgffkkebhmkfjojejmpbldmpobfkfo';
 const uBlockLiteExtensionId = 'ddkjiahejlhfcafbddmgiahcphecmpfh';
-const extensionPath = path.join(
-  process.env.LOCALAPPDATA,
+const chromeUserDataRoot = process.env.YDS_CHROME_USER_DATA || path.join(
+  process.env.LOCALAPPDATA || '',
   'Google',
   'Chrome',
-  'User Data',
-  'Profile 1',
-  'Extensions',
-  extensionId,
-  '5.4.1_0'
+  'User Data'
 );
+const chromeProfileName = process.env.YDS_CHROME_PROFILE || 'Profile 1';
+const chromeProfileRoot = path.join(chromeUserDataRoot, chromeProfileName);
+const extensionPath = process.env.YDS_TAMPERMONKEY_PATH || findLatestChromeExtensionPath(extensionId);
 const uBlockLiteExtensionPath = process.env.YDS_UBLOCK_PATH || findLatestChromeExtensionPath(uBlockLiteExtensionId);
 const userDataDir = path.join(projectRoot, '.tmp', 'tm-smoke-profile');
 const diagnosticsDir = path.join(projectRoot, 'diagnostics');
@@ -35,10 +34,10 @@ function stamp() {
 
 async function main() {
   if (!fs.existsSync(extensionPath)) {
-    throw new Error(`Tampermonkey extension path not found: ${extensionPath}`);
+    throw new Error(`Tampermonkey extension path not found under ${chromeProfileRoot}. Set YDS_CHROME_PROFILE, YDS_CHROME_USER_DATA, or YDS_TAMPERMONKEY_PATH.`);
   }
   if (!uBlockLiteExtensionPath || !fs.existsSync(uBlockLiteExtensionPath)) {
-    throw new Error('uBlock Origin Lite extension path not found. Install uBlock Lite in Chrome Profile 1 or set YDS_UBLOCK_PATH.');
+    throw new Error(`uBlock Origin Lite extension path not found under ${chromeProfileRoot}. Set YDS_CHROME_PROFILE, YDS_CHROME_USER_DATA, or YDS_UBLOCK_PATH.`);
   }
 
   fs.mkdirSync(diagnosticsDir, {
@@ -99,15 +98,7 @@ async function main() {
 }
 
 function findLatestChromeExtensionPath(id) {
-  const profileRoot = path.join(
-    process.env.LOCALAPPDATA || '',
-    'Google',
-    'Chrome',
-    'User Data',
-    'Profile 1',
-    'Extensions',
-    id
-  );
+  const profileRoot = path.join(chromeProfileRoot, 'Extensions', id);
   if (!fs.existsSync(profileRoot)) return '';
 
   const versions = fs.readdirSync(profileRoot, {

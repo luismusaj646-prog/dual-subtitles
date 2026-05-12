@@ -2,11 +2,39 @@ const { test, expect } = require('@playwright/test');
 const {
   captionTrack,
   emptyJson3,
+  injectUserscript,
   json3Cue,
   setupMockNonWatch,
   setupMockWatch,
   snapshot
 } = require('./helpers/userscriptHarness');
+
+function json3Cues(items) {
+  return JSON.stringify({
+    events: items.map((item) => ({
+      tStartMs: item.startMs,
+      dDurationMs: item.durationMs,
+      segs: [
+        {
+          utf8: item.text
+        }
+      ]
+    }))
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function asrTrack(languageCode = 'en', name = 'English (auto-generated)', overrides = {}) {
+  return captionTrack(languageCode, name, {
+    baseUrl: `https://www.youtube.com/api/timedtext?v=mock-video&lang=${encodeURIComponent(languageCode)}&kind=asr`,
+    kind: 'asr',
+    vssId: `a.${languageCode}`,
+    ...overrides
+  });
+}
 
 test('renders source and target using YouTube auto-translation from the source track', async ({ page }) => {
   await setupMockWatch(page, {
@@ -15,6 +43,9 @@ test('renders source and target using YouTube auto-translation from the source t
       captionTrack('zh-Hans', 'Chinese Simplified')
     ],
     defaultTrackIndex: 0,
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
     timedText(url) {
       if (url.searchParams.get('lang') === 'zh-Hans') return json3Cue('不应使用现成翻译轨');
       if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('你好世界');
@@ -31,10 +62,338 @@ test('renders source and target using YouTube auto-translation from the source t
   expect(state.cuesB).toBe(1);
   expect(state.fallback).toBe('');
   expect(state.fetch.target).toContain('en->zh-Hans');
+  expect(state.playerApiPrime).toBe('ok:zh-Hans');
+  expect(state.sourceKind).toBe('manual');
+  expect(state.asrSync).toBe('not-asr');
+  expect(state.translationRequest).toBe('plain');
+  expect(state.translationResult).toBe('ok');
+  await expect(page.locator('.ytp-subtitles-button')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(async () => page.evaluate(() => window.__mockVideoPlayCalls + window.__mockVideoPauseCalls)).toBe(0);
+  const calls = await page.evaluate(() => window.__mockCaptionApiCalls);
+  expect(calls.map((call) => call.slice(0, 3))).toEqual([
+    ['loadModule', 'captions'],
+    ['setOption', 'captions', 'track'],
+    ['setOption', 'captions', 'translationLanguage'],
+    ['setOption', 'captions', 'reload']
+  ]);
+  expect(calls[1][3].translationLanguage.languageCode).toBe('zh-Hans');
+  expect(calls[2][3].languageCode).toBe('zh-Hans');
 
   await page.evaluate(() => window.__setMockTime(1));
   await expect(page.locator('.yds-native-line-a')).toHaveText('Hello world');
   await expect(page.locator('.yds-native-line-b')).toHaveText('你好世界');
+});
+
+test('smooths short cue gaps and supports keyboard shortcuts', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    timedText(url) {
+      if (url.searchParams.get('tlang')) {
+        return json3Cues([
+          { startMs: 0, durationMs: 1000, text: '第一句译文' },
+          { startMs: 1300, durationMs: 1000, text: '第二句译文' }
+        ]);
+      }
+      return json3Cues([
+        { startMs: 0, durationMs: 1000, text: 'First source' },
+        { startMs: 1300, durationMs: 1000, text: 'Second source' }
+      ]);
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  await page.evaluate(() => window.__setMockTime(0.9));
+  await expect(page.locator('.yds-native-line-a')).toHaveText('First source');
+  await page.evaluate(() => window.__setMockTime(1.08));
+  await expect(page.locator('.yds-native-line-a')).toHaveText('First source');
+  await page.evaluate(() => window.__setMockTime(1.34));
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Second source');
+
+  await page.keyboard.press('Alt+D');
+  await expect.poll(async () => (await snapshot(page)).displayMode).toBe('source');
+  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+
+  await page.keyboard.press('Alt+D');
+  await expect.poll(async () => (await snapshot(page)).displayMode).toBe('target');
+  await expect(page.locator('.yds-native-line-a')).toBeHidden();
+  await expect(page.locator('.yds-native-line-b')).toHaveText('第二句译文');
+
+  await page.keyboard.press('Alt+X');
+  await expect.poll(async () => (await snapshot(page)).enabled).toBe(false);
+  await expect(page.locator('#yds-native-window')).toHaveCount(0);
+});
+
+test('shows source captions while target translation is still loading', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    async timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        await delay(1400);
+        return json3Cue('慢速译文');
+      }
+      return json3Cue('Fast source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('target-loading');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Fast source');
+  await expect(page.locator('.yds-native-line-b')).toContainText('译文加载中');
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('慢速译文');
+});
+
+test('keeps target loading visible and retries when translated timedtext is empty', async ({ page }) => {
+  let targetJson3Passes = 0;
+
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        if (url.searchParams.get('fmt') === 'json3') targetJson3Passes += 1;
+        if (targetJson3Passes < 3) return emptyJson3();
+        return json3Cue('重试后译文');
+      }
+      return json3Cue('Retry source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('target-loading');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Retry source');
+  await expect(page.locator('.yds-native-line-b')).toContainText('译文加载中');
+
+  await expect.poll(async () => targetJson3Passes, {
+    timeout: 15000
+  }).toBeGreaterThanOrEqual(3);
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('重试后译文');
+});
+
+test('stops target retries after three fast translated requests', async ({ page }) => {
+  let targetRequests = 0;
+
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        targetRequests += 1;
+        return emptyJson3();
+      }
+      return json3Cue('Source only after retry');
+    }
+  });
+
+  await expect.poll(async () => targetRequests, {
+    timeout: 8000
+  }).toBe(3);
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  const state = await snapshot(page);
+  expect(state.status).toContain('译文暂时不可用');
+  expect(state.targetPending).toBe(false);
+  expect(state.targetCueRetryCount).toBe(2);
+  expect(state.fetch.target).not.toContain('srv1');
+  expect(state.fetch.target).not.toContain('vtt');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Source only after retry');
+  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+});
+
+test('reuses cached cue pairs when switching back to a language', async ({ page }) => {
+  const targetRequests = {
+    ja: 0,
+    zh: 0
+  };
+
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      {
+        languageCode: 'zh-Hans',
+        languageName: { simpleText: 'Chinese Simplified' }
+      },
+      {
+        languageCode: 'ja',
+        languageName: { simpleText: 'Japanese' }
+      }
+    ],
+    timedText(url) {
+      const target = url.searchParams.get('tlang');
+      if (target === 'ja') {
+        targetRequests.ja += 1;
+        return json3Cue('日本語字幕');
+      }
+      if (target === 'zh-Hans') {
+        targetRequests.zh += 1;
+        return json3Cue('中文字幕');
+      }
+      return json3Cue('English source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('中文字幕');
+  expect(targetRequests.zh).toBe(1);
+  await page.locator('#yds-launcher-root').click();
+
+  await page.locator('[data-yds-control="target-lang"]').selectOption('ja');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('日本語字幕');
+  expect(targetRequests.ja).toBe(1);
+
+  await page.locator('[data-yds-control="target-lang"]').selectOption('zh-Hans');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('中文字幕');
+  await expect.poll(async () => (await snapshot(page)).fallback).toContain('cache-hit');
+  expect(targetRequests.zh).toBe(1);
+
+  await page.locator('[data-yds-control="target-lang"]').selectOption('ja');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('日本語字幕');
+  expect(targetRequests.ja).toBe(1);
+});
+
+test('auto-selects an English source before first fetch when the track list starts elsewhere', async ({ page }) => {
+  let targetRequests = 0;
+
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('ar', 'Arabic'),
+      captionTrack('zh-CN', 'Chinese'),
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 1,
+    transcriptEndpoint: false,
+    timedText(url) {
+      const lang = url.searchParams.get('lang');
+      const target = url.searchParams.get('tlang');
+      if (target) targetRequests += 1;
+      if (lang === 'en' && target === 'zh-Hans') return json3Cue('自动译文');
+      if (lang === 'en') return json3Cue('Auto selected source');
+      return emptyJson3();
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  const state = await snapshot(page);
+  expect(state.source).toContain('#2 English (en)');
+  expect(state.fallback).toBe('');
+  expect(state.cuesA).toBe(1);
+  expect(state.cuesB).toBe(1);
+  expect(targetRequests).toBe(1);
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Auto selected source');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('自动译文');
+});
+
+test('infers a first-run target language from browser locale', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'languages', {
+      configurable: true,
+      get: () => ['ja-JP', 'en-US']
+    });
+    Object.defineProperty(navigator, 'language', {
+      configurable: true,
+      get: () => 'ja-JP'
+    });
+  });
+
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      {
+        languageCode: 'ja',
+        languageName: { simpleText: 'Japanese' }
+      }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'ja') return json3Cue('日本語字幕');
+      return json3Cue('English source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).targetLang).toBe('ja');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('日本語字幕');
+});
+
+test('keeps subtitles above large visible controls in theater-style players', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    timedText(url) {
+      if (url.searchParams.get('tlang')) return json3Cue('中文字幕');
+      return json3Cue('English source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await page.evaluate(() => {
+    const player = document.querySelector('.html5-video-player');
+    const controls = document.querySelector('.ytp-chrome-bottom');
+    player.style.height = '720px';
+    player.classList.add('ytp-big-mode');
+    controls.style.height = '300px';
+    const native = document.querySelector('#yds-native-window');
+    if (native) native.__ydsStyleAt = 0;
+    window.__setMockTime(1);
+  });
+
+  await expect.poll(async () => page.locator('#yds-native-window').evaluate((node) => node.style.bottom)).toBe('22%');
+});
+
+test('drops subtitles to the video bottom when player controls autohide', async ({ page }) => {
+  await setupMockWatch(page, {
+    settings: {
+      bottomOffset: 2
+    },
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    timedText(url) {
+      if (url.searchParams.get('tlang')) return json3Cue('中文字幕');
+      return json3Cue('English source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  await page.evaluate(() => {
+    const player = document.querySelector('.html5-video-player');
+    const controls = document.querySelector('.ytp-chrome-bottom');
+    player.style.height = '720px';
+    player.classList.add('ytp-big-mode');
+    controls.style.height = '300px';
+    const native = document.querySelector('#yds-native-window');
+    if (native) native.__ydsStyleAt = 0;
+    window.__setMockTime(1);
+  });
+
+  await expect.poll(async () => page.locator('#yds-native-window').evaluate((node) => node.style.bottom)).toBe('22%');
+
+  await page.evaluate(() => {
+    const player = document.querySelector('.html5-video-player');
+    player.classList.add('ytp-autohide');
+    const native = document.querySelector('#yds-native-window');
+    if (native) native.__ydsStyleAt = 0;
+  });
+  await expect.poll(async () => page.locator('#yds-native-window').evaluate((node) => node.style.bottom)).toBe('2%');
 });
 
 test('uses translated timedtext when no direct target track exists', async ({ page }) => {
@@ -131,8 +490,9 @@ test('uses a YouTube translation-language dropdown and auto-saves style choices'
 
   await expect(page.locator('[data-yds-control="syncNativeStyle"]')).toHaveCount(0);
   await expect(page.locator('[data-yds-control="smartPosition"]')).toHaveCount(0);
-  await expect(page.locator('.yds-native-line-a')).toHaveCSS('font-size', '34px');
-  await expect(page.locator('.yds-native-line-a')).toHaveCSS('background-color', 'rgba(8, 8, 8, 0.75)');
+  await expect(page.locator('.yds-native-line-a')).toHaveCSS('font-size', '28px');
+  await expect(page.locator('.yds-native-line-a')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(page.locator('.yds-native-line-b')).toHaveCSS('color', 'rgb(227, 68, 252)');
 
   await page.locator('[data-yds-control="font-family"]').selectOption('mono');
   await expect.poll(async () => {
@@ -211,9 +571,11 @@ test('retries timedtext with native player request params', async ({ page }) => 
       xovt: '3'
     },
     timedText(url) {
-      if (url.searchParams.get('pot') !== 'mock-pot') return emptyJson3();
-      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('POT 翻译字幕');
-      return json3Cue('POT source line');
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        if (url.searchParams.get('pot') === 'mock-pot') return json3Cue('POT 翻译字幕');
+        return emptyJson3();
+      }
+      return json3Cue('Normal source line');
     }
   });
 
@@ -222,11 +584,517 @@ test('retries timedtext with native player request params', async ({ page }) => 
   const state = await snapshot(page);
   expect(state.cuesA).toBe(1);
   expect(state.cuesB).toBe(1);
-  expect(state.fetch.source).toContain(':native');
+  expect(state.fetch.source).not.toContain(':native');
   expect(state.fetch.target).toContain(':native');
 
-  await expect(page.locator('.yds-native-line-a')).toHaveText('POT source line');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Normal source line');
   await expect(page.locator('.yds-native-line-b')).toHaveText('POT 翻译字幕');
+});
+
+test('activates native captions without media controls when player translation is unavailable', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    nativeTimedTextHintAutoRequest: false,
+    nativeTimedTextHintParams: {
+      pot: 'warm-pot'
+    },
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('按钮译文');
+      return json3Cue('Button source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  const calls = await page.evaluate(() => window.__mockCaptionApiCalls);
+  expect(calls).toEqual([]);
+  await expect(page.locator('.ytp-subtitles-button')).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => ({
+    pause: window.__mockVideoPauseCalls,
+    play: window.__mockVideoPlayCalls
+  }))).toEqual({
+    pause: 0,
+    play: 0
+  });
+
+  const state = await snapshot(page);
+  expect(state.fetch.source).not.toContain(':native');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('按钮译文');
+});
+
+test('does not toggle native captions off when reloads happen before YouTube updates aria state', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    subtitleToggleDelayMs: 1000,
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('延迟按钮译文');
+      return json3Cue('Delayed button source');
+    }
+  });
+
+  await page.evaluate(() => window.__ydsDebug.reload());
+  await expect.poll(async () => page.evaluate(() => window.__mockSubtitleButtonClicks)).toBe(1);
+  await expect(page.locator('.ytp-subtitles-button')).toHaveAttribute('aria-pressed', 'true');
+  await page.waitForTimeout(1800);
+  expect(await page.evaluate(() => window.__mockSubtitleButtonClicks)).toBe(1);
+});
+
+test('retries the native captions button if YouTube ignores the first click', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    subtitleIgnoreFirstClick: true,
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('重试按钮译文');
+      return json3Cue('Retry button source');
+    }
+  });
+
+  await expect.poll(async () => page.evaluate(() => window.__mockSubtitleButtonClicks)).toBe(2);
+  await expect(page.locator('.ytp-subtitles-button')).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('recovers source captions from native timedtext params when plain json3 is empty', async ({ page }) => {
+  await setupMockWatch(page, {
+    allowNativeHintWait: true,
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    nativeTimedTextHintParams: {
+      pot: 'native-pot'
+    },
+    timedText(url) {
+      if (url.searchParams.get('pot') === 'native-pot') {
+        if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('原生参数译文');
+        return json3Cue('Native params source');
+      }
+      return emptyJson3();
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  const state = await snapshot(page);
+  expect(state.fetch.source).toContain('native-wait:ok');
+  expect(state.fetch.source).toContain(':native');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Native params source');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('原生参数译文');
+});
+
+test('primes YouTube player caption API and prefers native target timedtext params', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    nativeTimedTextHintAutoRequest: false,
+    nativeTimedTextHintParams: {
+      pot: 'prime-pot',
+      xovt: 'prime-xovt'
+    },
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        if (url.searchParams.get('pot') === 'prime-pot') return json3Cue('原生预热译文');
+        return json3Cue('普通译文');
+      }
+      return json3Cue('Prime source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  const state = await snapshot(page);
+  const calls = await page.evaluate(() => window.__mockCaptionApiCalls);
+  const trackCall = calls.find((call) => call[0] === 'setOption' && call[1] === 'captions' && call[2] === 'track');
+
+  expect(calls.map((call) => call.slice(0, 3))).toEqual([
+    ['loadModule', 'captions'],
+    ['setOption', 'captions', 'track'],
+    ['setOption', 'captions', 'translationLanguage'],
+    ['setOption', 'captions', 'reload']
+  ]);
+  expect(trackCall[3].translationLanguage.languageCode).toBe('zh-Hans');
+  expect(calls.find((call) => call[0] === 'setOption' && call[2] === 'translationLanguage')[3].languageCode).toBe('zh-Hans');
+  expect(state.playerApiPrime).toBe('ok:zh-Hans');
+  expect(state.fetch.target.split(' | ')[0]).toContain(':native');
+  expect(state.translationRequest).toBe('native');
+  expect(state.translationResult).toBe('ok');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('原生预热译文');
+  await expect.poll(async () => page.evaluate(() => window.__mockVideoPlayCalls + window.__mockVideoPauseCalls)).toBe(0);
+});
+
+test('primes player captions with target code when the API language list misses the exact target', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      { languageCode: 'ja', languageName: 'Japanese' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('目标 code 译文');
+      return json3Cue('Target code source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  const calls = await page.evaluate(() => window.__mockCaptionApiCalls);
+  const trackCall = calls.find((call) => call[0] === 'setOption' && call[2] === 'track');
+  const state = await snapshot(page);
+  expect(trackCall[3].translationLanguage.languageCode).toBe('zh-Hans');
+  expect(state.playerApiPrime).toBe('ok:zh-Hans');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('目标 code 译文');
+});
+
+test('primes auto-generated captions when player caption tracklist is empty', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      asrTrack()
+    ],
+    playerCaptionTracklist: [],
+    defaultTrackIndex: 0,
+    nativeTimedTextHintAutoRequest: false,
+    nativeTimedTextHintParams: {
+      pot: 'asr-pot',
+      xovt: 'asr-xovt'
+    },
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        if (url.searchParams.get('pot') === 'asr-pot') return json3Cue('空 tracklist 自动字幕译文');
+        return emptyJson3();
+      }
+      return json3Cue('ASR source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  const state = await snapshot(page);
+  const calls = await page.evaluate(() => window.__mockCaptionApiCalls);
+  const trackCall = calls.find((call) => call[0] === 'setOption' && call[1] === 'captions' && call[2] === 'track');
+
+  expect(state.playerApiPrime).toBe('ok:zh-Hans');
+  expect(trackCall[3].kind).toBe('asr');
+  expect(trackCall[3].vss_id).toBe('a.en');
+  expect(trackCall[3].translationLanguage.languageCode).toBe('zh-Hans');
+  expect(state.sourceKind).toBe('asr');
+  expect(state.asrSync).toBe('snap-ok');
+  expect(state.asrSyncDetail).toBe('1/1');
+  expect(state.fetch.source).toContain(':asr');
+  expect(state.fetch.target).toContain(':asr');
+  expect(state.translationRequest).toBe('native');
+  expect(state.translationResult).toBe('ok');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('ASR source');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('空 tracklist 自动字幕译文');
+});
+
+test('uses one ASR timedtext track and lightly snaps translated cues to source timing', async ({ page }) => {
+  const requests = [];
+
+  await setupMockWatch(page, {
+    tracks: [
+      asrTrack()
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      requests.push({
+        lang: url.searchParams.get('lang'),
+        kind: url.searchParams.get('kind'),
+        target: url.searchParams.get('tlang') || ''
+      });
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        return json3Cues([
+          { startMs: 300, durationMs: 1000, text: '第一句译文' },
+          { startMs: 1800, durationMs: 1000, text: '第二句译文' }
+        ]);
+      }
+      return json3Cues([
+        { startMs: 0, durationMs: 1000, text: 'ASR first' },
+        { startMs: 1500, durationMs: 1000, text: 'ASR second' }
+      ]);
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  const state = await snapshot(page);
+  expect(state.sourceKind).toBe('asr');
+  expect(state.asrSync).toBe('snap-ok');
+  expect(state.asrSyncDetail).toBe('2/2');
+  expect(state.fetch.source).toContain('json3:en:asr');
+  expect(state.fetch.target).toContain('json3:en->zh-Hans:asr');
+  expect(requests.some((request) => request.kind === 'asr' && request.lang === 'en' && !request.target)).toBe(true);
+  expect(requests.some((request) => request.kind === 'asr' && request.lang === 'en' && request.target === 'zh-Hans')).toBe(true);
+
+  await page.evaluate(() => window.__setMockTime(0.1));
+  await expect(page.locator('.yds-native-line-a')).toHaveText('ASR first');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('第一句译文');
+
+  await page.evaluate(() => window.__setMockTime(1.52));
+  await expect(page.locator('.yds-native-line-a')).toHaveText('ASR second');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('第二句译文');
+});
+
+test('skips ASR cue snapping when translated segmentation is too different', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      asrTrack()
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        return json3Cues([
+          { startMs: 5000, durationMs: 1000, text: '远处译文一' },
+          { startMs: 7000, durationMs: 1000, text: '远处译文二' }
+        ]);
+      }
+      return json3Cues([
+        { startMs: 0, durationMs: 1000, text: 'ASR first' },
+        { startMs: 1500, durationMs: 1000, text: 'ASR second' }
+      ]);
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  const state = await snapshot(page);
+  expect(state.sourceKind).toBe('asr');
+  expect(state.asrSync).toBe('snap-skip');
+  expect(state.asrSyncDetail).toBe('0/2');
+
+  await page.evaluate(() => window.__setMockTime(0.1));
+  await expect(page.locator('.yds-native-line-a')).toHaveText('ASR first');
+  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+});
+
+test('bridges native DOM when ASR translated timedtext is rate limited', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      asrTrack()
+    ],
+    defaultTrackIndex: 0,
+    nativeCaptionText: '',
+    nativeMenuSummaryText: '字幕 (1) 英文 (自動產生) >> 中文（繁體字）',
+    nativeMenuTranslatedText: '菜单触发译文',
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        return {
+          status: 429,
+          contentType: 'text/html; charset=utf-8',
+          body: '<html><title>Sorry...</title></html>'
+        };
+      }
+      return json3Cue('ASR source survives');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  let state = await snapshot(page);
+  expect(state.sourceKind).toBe('asr');
+  expect(state.nativeTargetFallback).toBe(true);
+  expect(state.nativeTargetFallbackReason).toBe('target-429');
+  expect(state.nativeTargetFallbackPreserve).toBe(false);
+  expect(state.fetch.source).toContain(':asr');
+  expect(state.fetch.target).toContain(':asr');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('ASR source survives');
+  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+  await expect(page.locator('.ytp-caption-window-container')).toHaveClass(/yds-native-mode/);
+  await expect.poll(async () => (await snapshot(page)).nativeTranslationTrigger).toBe('ok:target-429');
+  await expect.poll(async () => (await snapshot(page)).nativeMenuTrigger).toBe('ok:auto-translate:zh-Hans');
+  await expect.poll(async () => page.evaluate(() => window.__mockVideoPlayCalls + window.__mockVideoPauseCalls)).toBe(0);
+
+  const calls = await page.evaluate(() => window.__mockCaptionApiCalls);
+  const trackCalls = calls.filter((call) => call[0] === 'setOption' && call[1] === 'captions' && call[2] === 'track');
+  const translationCalls = calls.filter((call) => call[0] === 'setOption' && call[1] === 'captions' && call[2] === 'translationLanguage');
+  const reloadCalls = calls.filter((call) => call[0] === 'setOption' && call[1] === 'captions' && call[2] === 'reload');
+
+  expect(trackCalls).toHaveLength(3);
+  expect(trackCalls[0][3].translationLanguage.languageCode).toBe('zh-Hans');
+  expect(trackCalls[1][3].kind).toBe('asr');
+  expect(trackCalls[1][3].vss_id).toBe('a.en');
+  expect(trackCalls[1][3].translationLanguage).toBeUndefined();
+  expect(trackCalls[2][3].translationLanguage.languageCode).toBe('zh-Hans');
+  expect(translationCalls.map((call) => call[3] && call[3].languageCode ? call[3].languageCode : null)).toEqual([
+    'zh-Hans',
+    null,
+    'zh-Hans'
+  ]);
+  expect(reloadCalls).toHaveLength(3);
+
+  await expect.poll(async () => (await snapshot(page)).nativeTargetFallbackText).toBe('菜单触发译文');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('菜单触发译文');
+  await expect.poll(async () => page.evaluate(() => window.__mockMenuTriggerCalls.map((call) => call.join(':')).join('|'))).toContain('target:zh-Hans');
+  await expect.poll(async () => page.evaluate(() => window.__mockMenuTriggerCalls.map((call) => call.join(':')).join('|'))).toContain('subtitles');
+  state = await snapshot(page);
+  expect(state.nativeTargetFallbackPreserve).toBe(false);
+});
+
+test('loads translated cues when source timedtext is empty but player translation is applied', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('只有译文也要显示');
+      return emptyJson3();
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase, {
+    timeout: 10000
+  }).toBe('ready');
+
+  const state = await snapshot(page);
+  expect(state.playerApiPrime).toBe('ok:zh-Hans');
+  expect(state.fetch.source).toContain('source-empty-target-allowed');
+  expect(state.fetch.target).not.toContain('skip-source-empty');
+  expect(state.translationRequest).toBe('plain');
+  expect(state.translationResult).toBe('ok');
+  expect(state.cuesA).toBe(0);
+  expect(state.cuesB).toBe(1);
+  await expect(page.locator('.yds-native-line-a')).toBeHidden();
+  await expect(page.locator('.yds-native-line-b')).toHaveText('只有译文也要显示');
+});
+
+test('falls back to plain translated timedtext when player caption API is missing', async ({ page }) => {
+  await setupMockWatch(page, {
+    playerCaptionApi: false,
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('普通译文');
+      return json3Cue('Plain fallback source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  const state = await snapshot(page);
+  expect(state.playerApiPrime).toBe('miss:api-missing');
+  expect(state.fetch.target.split(' | ')[0]).not.toContain(':native');
+  expect(state.translationRequest).toBe('plain');
+  expect(state.translationResult).toBe('ok');
+  expect(await page.evaluate(() => window.__mockCaptionApiCalls)).toEqual([]);
+  await expect(page.locator('.yds-native-line-b')).toHaveText('普通译文');
+});
+
+test('falls back to plain translated timedtext when player caption API throws', async ({ page }) => {
+  await setupMockWatch(page, {
+    playerCaptionApi: {
+      setOptionThrows: true
+    },
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('抛错降级译文');
+      return json3Cue('Throw fallback source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  const state = await snapshot(page);
+  expect(state.playerApiPrime).toContain('error:');
+  expect(state.fetch.target.split(' | ')[0]).not.toContain(':native');
+  expect(state.translationRequest).toBe('plain');
+  expect(state.translationResult).toBe('ok');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('抛错降级译文');
+  await expect.poll(async () => page.evaluate(() => window.__mockVideoPlayCalls + window.__mockVideoPauseCalls)).toBe(0);
+});
+
+test('does not repeat player caption API prime on quick reload', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('一次预热译文');
+      return json3Cue('Single prime source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await page.evaluate(() => window.__ydsDebug.reload());
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  const calls = await page.evaluate(() => window.__mockCaptionApiCalls);
+  const setTrackCalls = calls.filter((call) => call[0] === 'setOption' && call[1] === 'captions' && call[2] === 'track');
+  const reloadCalls = calls.filter((call) => call[0] === 'setOption' && call[1] === 'captions' && call[2] === 'reload');
+  const state = await snapshot(page);
+
+  expect(setTrackCalls).toHaveLength(1);
+  expect(reloadCalls).toHaveLength(1);
+  expect(state.playerApiPrime).toBe('skipped:recent-ok');
+});
+
+test('automatically retries after first source-empty pass so manual reload is not required', async ({ page }) => {
+  let sourceRequests = 0;
+
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    timedText(url) {
+      if (!url.searchParams.get('tlang')) {
+        sourceRequests += 1;
+        if (sourceRequests === 1) return emptyJson3();
+        return json3Cue('Auto retry source');
+      }
+      return json3Cue('自动重试译文');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase, {
+    timeout: 10000
+  }).toBe('ready');
+
+  const state = await snapshot(page);
+  expect(sourceRequests).toBeGreaterThanOrEqual(2);
+  expect(state.cuesA).toBe(1);
+  expect(state.cuesB).toBe(1);
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Auto retry source');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('自动重试译文');
 });
 
 test('skips translated timedtext when the source track has no cues', async ({ page }) => {
@@ -253,10 +1121,17 @@ test('skips translated timedtext when the source track has no cues', async ({ pa
   expect(state.cuesA).toBe(0);
   expect(state.cuesB).toBe(0);
   expect(state.fetch.target).toContain('skip-source-empty');
+  expect(state.translationRequest).toBe('skipped-source-empty');
+  expect(state.translationResult).toBe('skipped');
 });
 
 test('keeps source captions when translated timedtext is rate limited', async ({ page }) => {
+  let machineRequests = 0;
+
   await setupMockWatch(page, {
+    settings: {
+      machineTranslateFallback: false
+    },
     tracks: [
       captionTrack('en', 'English')
     ],
@@ -270,6 +1145,10 @@ test('keeps source captions when translated timedtext is rate limited', async ({
         };
       }
       return json3Cue('English source survives');
+    },
+    machineTranslate() {
+      machineRequests += 1;
+      return JSON.stringify([[['should not be requested', '']]]);
     }
   });
 
@@ -279,13 +1158,385 @@ test('keeps source captions when translated timedtext is rate limited', async ({
   expect(state.cuesA).toBe(1);
   expect(state.cuesB).toBe(0);
   expect(state.fetch.target).toContain('target-error-kept-source');
-  expect(state.status).toBe('只拿到原字幕');
+  expect(state.status).toContain('译文暂时不可用');
+  expect(state.backoffRemainingMs).toBe(0);
+  expect(state.targetPending).toBe(false);
+  expect(state.machineTranslateActive).toBe(false);
+  expect(state.machinePromptStatus).toBe('off');
+  expect(state.machineTranslateAvailable).toBe(false);
+  expect(machineRequests).toBe(0);
 
   await expect(page.locator('.yds-native-line-a')).toHaveText('English source survives');
   await expect(page.locator('.yds-native-line-b')).toBeHidden();
+  await expect(page.getByRole('button', { name: '本视频启用机翻' })).toHaveCount(0);
 });
 
-test('falls back to transcript API when timedtext returns no cues', async ({ page }) => {
+test('does not ask for machine translation while the fallback is disabled', async ({ page }) => {
+  let machineRequests = 0;
+
+  await setupMockWatch(page, {
+    videoId: 'prompt-first',
+    settings: {
+      machineTranslateFallback: false
+    },
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    nativeCaptionText: '',
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        return {
+          status: 429,
+          contentType: 'text/html; charset=utf-8',
+          body: '<html><title>Sorry...</title></html>'
+        };
+      }
+      return json3Cue('Prompt source line');
+    },
+    machineTranslate(url) {
+      machineRequests += 1;
+      return JSON.stringify([[['should not be requested', url.searchParams.get('q') || '']]]);
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Prompt source line');
+  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+  await expect(page.getByRole('button', { name: '本视频启用机翻' })).toHaveCount(0);
+  expect(machineRequests).toBe(0);
+
+  let state = await snapshot(page);
+  expect(state.machineTranslateAvailable).toBe(false);
+  expect(state.machinePromptStatus).toBe('off');
+  expect(state.machineTranslateActive).toBe(false);
+
+  await page.goto('https://www.youtube.com/watch?v=prompt-second&ydsDebug=1', {
+    waitUntil: 'domcontentloaded'
+  });
+  await injectUserscript(page);
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  state = await snapshot(page);
+  expect(state.videoId).toBe('prompt-second');
+  expect(state.machineTranslateSetting).toBe(false);
+  expect(state.machineTranslateActive).toBe(false);
+  expect(state.machinePromptStatus).toBe('off');
+  expect(machineRequests).toBe(0);
+  await expect(page.getByRole('button', { name: '本视频启用机翻' })).toHaveCount(0);
+});
+
+test('does not auto-enable machine translation from legacy stored settings', async ({ page }) => {
+  await setupMockWatch(page, {
+    settings: {
+      machineTranslateFallback: true
+    },
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    nativeCaptionText: '',
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        return {
+          status: 429,
+          contentType: 'text/html; charset=utf-8',
+          body: '<html><title>Sorry...</title></html>'
+        };
+      }
+      return json3Cue('Legacy setting source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  const state = await snapshot(page);
+  expect(state.machineTranslateSetting).toBe(false);
+  expect(state.machineTranslateActive).toBe(false);
+  expect(state.nativeTargetFallback).toBe(true);
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Legacy setting source');
+  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+});
+
+test('tries plain translated timedtext after native params are rate limited', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    nativeTimedTextHintParams: {
+      fmt: 'json3',
+      pot: 'mock-pot'
+    },
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        if (url.searchParams.get('pot') === 'mock-pot') {
+          return {
+            status: 429,
+            contentType: 'text/html; charset=utf-8',
+            body: '<html><title>Sorry...</title></html>'
+          };
+        }
+        return json3Cue('普通参数译文');
+      }
+      return json3Cue('Native 429 source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  const state = await snapshot(page);
+  expect(state.cuesA).toBe(1);
+  expect(state.cuesB).toBe(1);
+  expect(state.fetch.target).toContain(':native:err(HTTP 429');
+  expect(state.fetch.target).toContain('json3:en->zh-Hans:ok(1');
+  expect(state.translationResult).toBe('ok');
+  expect(state.machineTranslateActive).toBe(false);
+  await expect(page.locator('.yds-native-line-b')).toHaveText('普通参数译文');
+});
+
+test('keeps machine translation fallback disabled even when the stored toggle is on', async ({ page }) => {
+  let machineRequests = 0;
+
+  await setupMockWatch(page, {
+    settings: {
+      machineTranslateFallback: true,
+      machineTranslateFallbackUserSet: true
+    },
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    nativeCaptionText: '',
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        return {
+          status: 429,
+          contentType: 'text/html; charset=utf-8',
+          body: '<html><title>Sorry...</title></html>'
+        };
+      }
+      return json3Cue('Machine source line');
+    },
+    async machineTranslate(url) {
+      machineRequests += 1;
+      await delay(500);
+      return JSON.stringify([[['should not be requested', url.searchParams.get('q') || '']]]);
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Machine source line');
+  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+  await expect(page.locator('.yds-native-line-b')).not.toContainText('机翻中');
+  await expect(page.locator('#yds-native-window')).not.toHaveClass(/yds-native-target-fallback/);
+
+  await page.evaluate(() => {
+    const player = document.querySelector('.html5-video-player');
+    const controls = document.querySelector('.ytp-chrome-bottom');
+    player.style.height = '360px';
+    controls.style.height = '60px';
+    const native = document.querySelector('#yds-native-window');
+    if (native) native.__ydsStyleAt = 0;
+  });
+  await expect.poll(async () => page.locator('#yds-native-window').evaluate((node) => node.style.bottom)).toBe('20%');
+
+  await page.evaluate(() => {
+    const player = document.querySelector('.html5-video-player');
+    player.classList.add('ytp-autohide');
+    const native = document.querySelector('#yds-native-window');
+    if (native) native.__ydsStyleAt = 0;
+  });
+  await expect.poll(async () => page.locator('#yds-native-window').evaluate((node) => node.style.bottom)).toBe('2%');
+
+  const state = await snapshot(page);
+  expect(state.cuesA).toBe(1);
+  expect(state.cuesB).toBe(0);
+  expect(state.translationResult).toBe('429');
+  expect(state.machineTranslateAvailable).toBe(false);
+  expect(state.machineTranslateSetting).toBe(false);
+  expect(state.machineTranslateActive).toBe(false);
+  expect(state.machineTranslateReason).toBe('');
+  expect(state.machineTranslateMode).toBe('');
+  expect(state.machinePromptStatus).toBe('off');
+  expect(state.machineTranslateLast).toBe('');
+  expect(state.status).toContain('译文暂时不可用');
+  expect(machineRequests).toBe(0);
+});
+
+test('does not bridge native caption DOM when it is still the source line', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    nativeCaptionText: 'Still source text',
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        return {
+          status: 429,
+          contentType: 'text/html; charset=utf-8',
+          body: '<html><title>Sorry...</title></html>'
+        };
+      }
+      return json3Cue('Still source text');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Still source text');
+  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+  await expect(page.locator('.ytp-caption-window-container')).toHaveClass(/yds-native-mode/);
+
+  const state = await snapshot(page);
+  expect(state.nativeTargetFallback).toBe(true);
+  expect(state.nativeTargetFallbackPreserve).toBe(false);
+  expect(state.nativeTargetFallbackText).toBe('Still source text');
+});
+
+test('bridges native caption DOM as translated fallback after player API succeeds but timedtext is rate limited', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    nativeCaptionText: '原生 DOM 译文',
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        return {
+          status: 429,
+          contentType: 'text/html; charset=utf-8',
+          body: '<html><title>Sorry...</title></html>'
+        };
+      }
+      return json3Cue('Native DOM fallback source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Native DOM fallback source');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('原生 DOM 译文');
+  await expect(page.locator('.ytp-caption-segment')).toHaveText('原生 DOM 译文');
+  await expect(page.locator('.ytp-caption-window-container')).toHaveClass(/yds-native-mode/);
+
+  const state = await snapshot(page);
+  expect(state.playerApiPrime).toBe('ok:zh-Hans');
+  expect(state.cuesA).toBe(1);
+  expect(state.cuesB).toBe(0);
+  expect(state.translationResult).toBe('429');
+  expect(state.nativeTargetFallback).toBe(true);
+  expect(state.nativeTargetFallbackPreserve).toBe(false);
+  expect(state.nativeTargetFallbackText).toBe('原生 DOM 译文');
+  expect(state.nativeTargetFallbackReason).toBe('target-429');
+  expect(state.machinePromptStatus).toBe('off');
+  expect(state.machineTranslateActive).toBe(false);
+  expect(state.status).toContain('译文来自 YouTube 原生字幕');
+});
+
+test('keeps script source visible while waiting for translated DOM fallback text', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    nativeCaptionText: '',
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        return {
+          status: 429,
+          contentType: 'text/html; charset=utf-8',
+          body: '<html><title>Sorry...</title></html>'
+        };
+      }
+      return json3Cue('Native bridge source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Native bridge source');
+  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+  await expect(page.locator('.ytp-caption-window-container')).toHaveClass(/yds-native-mode/);
+
+  let state = await snapshot(page);
+  expect(state.nativeTargetFallback).toBe(true);
+  expect(state.nativeTargetFallbackPreserve).toBe(false);
+  expect(state.nativeTargetFallbackText).toBe('');
+  expect(state.machinePromptStatus).toBe('off');
+  expect(state.machineTranslateAvailable).toBe(false);
+  await expect(page.getByRole('button', { name: '本视频启用机翻' })).toHaveCount(0);
+
+  await page.evaluate(() => {
+    document.querySelector('.ytp-caption-segment').textContent = '迟到的 YouTube 原生译文';
+  });
+
+  await expect.poll(async () => (await snapshot(page)).nativeTargetFallbackText).toBe('迟到的 YouTube 原生译文');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('迟到的 YouTube 原生译文');
+  await expect.poll(async () => (await snapshot(page)).machinePromptStatus).toBe('off');
+  await expect(page.locator('.yds-machine-prompt')).toBeHidden();
+  await expect(page.locator('.ytp-caption-window-container')).toHaveClass(/yds-native-mode/);
+  state = await snapshot(page);
+  expect(state.nativeTargetFallbackPreserve).toBe(false);
+});
+
+test('bridges native translated captions when cue fetches are empty but player API was applied', async ({ page }) => {
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    nativeCaptionText: 'YouTube 原生译文仍可见',
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        return {
+          status: 429,
+          contentType: 'text/html; charset=utf-8',
+          body: '<html><title>Sorry...</title></html>'
+        };
+      }
+      return emptyJson3();
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('YouTube 原生译文仍可见');
+  await expect(page.locator('.ytp-caption-segment')).toHaveText('YouTube 原生译文仍可见');
+  await expect(page.locator('.ytp-caption-window-container')).toHaveClass(/yds-native-mode/);
+
+  const state = await snapshot(page);
+  expect(state.cuesA).toBe(0);
+  expect(state.cuesB).toBe(0);
+  expect(state.playerApiPrime).toBe('ok:zh-Hans');
+  expect(state.nativeTargetFallback).toBe(true);
+  expect(state.nativeTargetFallbackPreserve).toBe(false);
+  expect(state.nativeTargetFallbackText).toBe('YouTube 原生译文仍可见');
+  expect(state.translationResult).toBe('429');
+});
+
+test('does not use transcript API on first-screen source-empty timedtext', async ({ page }) => {
   await setupMockWatch(page, {
     tracks: [
       captionTrack('en', 'English')
@@ -303,19 +1554,18 @@ test('falls back to transcript API when timedtext returns no cues', async ({ pag
     ]
   });
 
-  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('no-cues');
 
   const state = await snapshot(page);
-  expect(state.cuesA).toBe(1);
+  expect(state.cuesA).toBe(0);
   expect(state.cuesB).toBe(0);
-  expect(state.fallback).toBe('transcript-api');
-  expect(state.fetch.source).toContain('transcript-api:ok(1)');
+  expect(state.fallback).toBe('source-empty');
+  expect(state.fetch.source).not.toContain('transcript-api');
 
-  await expect(page.locator('.yds-native-line-a')).toHaveText('Transcript fallback line');
-  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+  await expect(page.locator('#yds-native-window')).toHaveCount(0);
 });
 
-test('falls back to transcript UI when transcript API has no endpoint', async ({ page }) => {
+test('does not open transcript UI on first-screen source-empty timedtext', async ({ page }) => {
   await setupMockWatch(page, {
     tracks: [
       captionTrack('en', 'English')
@@ -333,20 +1583,18 @@ test('falls back to transcript UI when transcript API has no endpoint', async ({
     ]
   });
 
-  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('no-cues');
 
   const state = await snapshot(page);
-  expect(state.cuesA).toBe(1);
+  expect(state.cuesA).toBe(0);
   expect(state.cuesB).toBe(0);
-  expect(state.fallback).toBe('transcript-ui');
-  expect(state.fetch.source).toContain('transcript-api:err');
-  expect(state.fetch.source).toContain('transcript-ui:ok(1,current)');
+  expect(state.fallback).toBe('source-empty');
+  expect(state.fetch.source).not.toContain('transcript-ui');
 
-  await expect(page.locator('.yds-native-line-a')).toHaveText('Transcript UI fallback line');
-  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+  await expect(page.locator('ytd-engagement-panel-section-list-renderer')).toHaveCount(0);
 });
 
-test('retries a same-language default caption track when selected track has no usable cues', async ({ page }) => {
+test('does not retry a same-language default caption track on first-screen empty cues', async ({ page }) => {
   await setupMockWatch(page, {
     tracks: [
       captionTrack('en', 'English'),
@@ -368,18 +1616,17 @@ test('retries a same-language default caption track when selected track has no u
     }
   });
 
-  await expect.poll(async () => (await snapshot(page)).phase, {
-    timeout: 15000
-  }).toBe('ready');
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('no-cues');
 
   const state = await snapshot(page);
-  expect(state.source).toContain('#1 English (auto-generated) (en) [fallback]');
-  expect(state.fallback).toContain('default-track:0->1');
-  expect(state.cuesA).toBe(1);
-  expect(state.cuesB).toBe(1);
+  expect(state.source).toContain('#0 English (en)');
+  expect(state.fallback).toContain('source-empty');
+  expect(state.fallback).not.toContain('default-track:0->1');
+  expect(state.cuesA).toBe(0);
+  expect(state.cuesB).toBe(0);
+  expect(state.fetch.source).not.toContain('kind=asr');
 
-  await expect(page.locator('.yds-native-line-a')).toHaveText('Default track source');
-  await expect(page.locator('.yds-native-line-b')).toHaveText('默认轨翻译');
+  await expect(page.locator('#yds-native-window')).toHaveCount(0);
 });
 
 test('does not replace the selected source with a different-language default track', async ({ page }) => {
