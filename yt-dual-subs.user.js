@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         YouTube Dual Native Subs
 // @namespace    https://github.com/luismusaj646-prog/dual-subtitles
-// @version      4.2.47
+// @version      4.2.0
 // @description  Native dual subtitles for YouTube
 // @license      GPL-3.0-only
 // @homepageURL  https://github.com/luismusaj646-prog/dual-subtitles
 // @supportURL   https://github.com/luismusaj646-prog/dual-subtitles/issues
+// @updateURL    https://raw.githubusercontent.com/luismusaj646-prog/dual-subtitles/master/yt-dual-subs.user.js
+// @downloadURL  https://raw.githubusercontent.com/luismusaj646-prog/dual-subtitles/master/yt-dual-subs.user.js
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
 // @grant        GM_addStyle
@@ -21,7 +23,7 @@
   'use strict';
 
   var SCRIPT_NAME = 'yt-dual-subs';
-  var SCRIPT_VERSION = '4.2.47';
+  var SCRIPT_VERSION = '4.2.0';
   var SETTINGS_KEY = 'yds_native_settings_v2';
   var RUNTIME_KEY = '__ydsRuntime';
   var DEBUG_API_KEY = '__ydsDebug';

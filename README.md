@@ -2,7 +2,7 @@
 
 YouTube 双字幕 Tampermonkey 脚本。
 
-当前版本：`4.2.47`
+当前版本：`4.2.0`
 
 项目地址：https://github.com/luismusaj646-prog/dual-subtitles
 

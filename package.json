@@ -1,7 +1,7 @@
 {
   "name": "youtube-dual-native-subs",
   "private": true,
-  "version": "4.2.47",
+  "version": "4.2.0",
   "description": "YouTube dual native subtitles userscript.",
   "license": "GPL-3.0-only",
   "homepage": "https://github.com/luismusaj646-prog/dual-subtitles",
