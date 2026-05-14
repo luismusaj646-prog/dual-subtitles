@@ -206,12 +206,13 @@ async function setupMockWatch(page, options = {}) {
   await page.goto(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&ydsDebug=1`, {
     waitUntil: 'domcontentloaded'
   });
+  const defaultSettings = {
+    machineTranslateFallback: false,
+    machineTranslateFallbackUserSet: true
+  };
   const settings = Object.prototype.hasOwnProperty.call(options, 'settings')
-    ? options.settings
-    : {
-        machineTranslateFallback: false,
-        machineTranslateFallbackUserSet: true
-      };
+    ? Object.assign({}, defaultSettings, options.settings)
+    : defaultSettings;
   if (settings) {
     await page.evaluate((settings) => {
       window.localStorage.setItem('__yds_gm__yds_native_settings_v2', JSON.stringify(settings));

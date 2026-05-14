@@ -1396,7 +1396,8 @@ test('upgrades legacy machine translation setting to machine-first mode', async 
   expect(state.machineTranslateSetting).toBe(true);
   expect(state.machineTranslateActive).toBe(true);
   expect(state.machineTranslateMode).toBe('primary');
-  expect(state.nativeTargetFallback).toBe(true);
+  expect(state.targetProvider).toBe('machine');
+  expect(state.machinePromptStatus).toBe('off');
   await expect(page.locator('.yds-native-line-a')).toHaveText('Legacy setting source');
   await expect(page.locator('.yds-native-line-b')).toHaveText('Legacy setting source');
 });
