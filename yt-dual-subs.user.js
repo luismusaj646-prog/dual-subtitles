@@ -663,7 +663,14 @@
     'html[dark] .yds-debug,body[dark] .yds-debug,ytd-app[dark] .yds-debug,.dark .yds-debug{' +
       'background:#1f1f1f;color:#f1f1f1;' +
     '}' +
-    '.ytp-caption-window-container.yds-native-mode .caption-window{opacity:0 !important;pointer-events:none !important;}' +
+    '.html5-video-player.yds-native-suppressed .ytp-caption-window-container,' +
+    '.ytp-caption-window-container.yds-native-mode{' +
+      'opacity:0 !important;pointer-events:none !important;' +
+    '}' +
+    '.html5-video-player.yds-native-suppressed .ytp-caption-window-container .caption-window,' +
+    '.ytp-caption-window-container.yds-native-mode .caption-window{' +
+      'opacity:0 !important;pointer-events:none !important;' +
+    '}' +
     '.html5-video-player .yds-native-window{' +
       'position:absolute;left:0;right:0;bottom:9%;z-index:63;padding:0 24px;box-sizing:border-box;' +
       'display:flex;flex-direction:column;align-items:center;text-align:center;pointer-events:none;' +
@@ -876,7 +883,7 @@
       stopNativeCaptionObserver('destroy');
       if (app.observer) app.observer.disconnect();
       stopLoop('destroy');
-      clearNativeCaptionWindow();
+      clearNativeCaptionWindow({ releaseSuppression: true });
       unmountUi();
       while (app.teardown.length) {
         try {
@@ -1661,7 +1668,7 @@
       clearMachinePromptState();
       clearAsrSyncStatus();
       stopLoop('disabled');
-      clearNativeCaptionWindow();
+      clearNativeCaptionWindow({ releaseSuppression: true });
       setPhase('disabled');
       setStatus(TEXT.disabled);
       syncUi();
@@ -1742,6 +1749,7 @@
         'translation-result=' + (snapshot.translationResult || '-'),
         'native-target-fallback=' + formatNativeTargetFallbackStatus(snapshot),
         'native-dom=' + formatNativeDomTextStatus(snapshot),
+        'native-caption-suppressed=' + (snapshot.nativeCaptionSuppressed ? 'yes' : 'no'),
         'machine-prompt=' + formatMachinePromptStatus(snapshot),
         'machine-translation=' + formatMachineTranslationStatus(snapshot),
         'fetch-source=' + (snapshot.fetch.source || '-'),
@@ -2932,7 +2940,7 @@
       }, 1000);
     }
 
-    function buildCueCacheKey(videoId, track, targetLang) {
+    function buildCueCacheKey(videoId, track, targetLang, targetTrack) {
       if (!videoId || !track) return '';
       return [
         videoId,
@@ -2940,7 +2948,11 @@
         track.vssId || '',
         getTrackName(track),
         targetLang || '',
-        hashString(track.baseUrl || '')
+        hashString(track.baseUrl || ''),
+        targetTrack ? (targetTrack.languageCode || '') : '',
+        targetTrack ? (targetTrack.vssId || '') : '',
+        targetTrack ? getTrackName(targetTrack) : '',
+        targetTrack ? hashString(targetTrack.baseUrl || '') : ''
       ].join('|');
     }
 
@@ -3320,7 +3332,7 @@
       setPhase('idle');
       setStatus(TEXT.waitingWatchPage);
       stopLoop('non-watch');
-      clearNativeCaptionWindow();
+      clearNativeCaptionWindow({ releaseSuppression: true });
     }
 
     function resetVideoState(videoId, reason) {
@@ -3414,13 +3426,14 @@
         clearAsrSyncStatus();
         resetTargetProviderState('disabled');
         stopLoop('load-disabled');
-        clearNativeCaptionWindow();
+        clearNativeCaptionWindow({ releaseSuppression: true });
         setPhase('disabled');
         setStatus(TEXT.disabled);
         return;
       }
 
       var videoId = getVideoId();
+      suppressYouTubeNativeCaptionWindow();
       var loadKey = [videoId, state.targetLang, state.sourceTrackIndex].join('|');
       if (!force && !app.loading && app.pendingLoadKey === loadKey && (app.cuesA.length || app.cuesB.length)) {
         logger.debug('skip completed load', { reason: reason, loadKey: loadKey });
@@ -3514,7 +3527,8 @@
         app.translationLanguages = getTranslationLanguages(captionData.playerResponse, tracks, selected.track);
         syncUi();
 
-        var cueCacheKey = buildCueCacheKey(videoId, selected.track, state.targetLang);
+        var manualTargetTrack = findManualTargetTrack(tracks, state.targetLang, selected.index);
+        var cueCacheKey = buildCueCacheKey(videoId, selected.track, state.targetLang, manualTargetTrack);
         var cachedPair = shouldBypassCueCache(reason) ? null : getCachedCuePair(cueCacheKey);
         if (cachedPair) {
           if (cachedPair.sourceName) app.lastSourceName = cachedPair.sourceName;
@@ -3526,20 +3540,30 @@
         logger.debug('track pair', {
           sourceLang: selected.track.languageCode || '',
           targetLang: state.targetLang,
-          targetMode: 'translated'
+          targetMode: manualTargetTrack ? 'manual-track' : 'translated',
+          targetTrack: manualTargetTrack ? getTrackName(manualTargetTrack) : ''
         });
 
         var machineFirst = !!(CONFIG.machineTranslateFallbackEnabled && state.machineTranslateFallback);
         app.playerApiPrimeRetryCount = 0;
-        var playerPrime = primePlayerCaptionTranslation(videoId, selected.track, state.targetLang);
-        if (!playerPrime.ok) schedulePlayerCaptionPrimeRetry(videoId, selected.track, state.targetLang, requestId);
-        return fetchBestPair(selected.track, null, state.targetLang, {
-          allowTargetWithoutSource: !machineFirst && !!(playerPrime && playerPrime.ok),
-          preferNativeTarget: !!(playerPrime && playerPrime.ok),
+        var playerPrime = manualTargetTrack
+          ? { ok: false, status: 'skipped', detail: 'manual-target' }
+          : primePlayerCaptionTranslation(videoId, selected.track, state.targetLang);
+        if (manualTargetTrack) {
+          app.playerApiPrimeStatus = 'skipped';
+          app.playerApiPrimeDetail = 'manual-target';
+          app.playerApiPrimeKey = buildPlayerApiPrimeKey(videoId, selected.track, state.targetLang);
+          app.playerApiPrimeOk = false;
+        } else if (!playerPrime.ok) {
+          schedulePlayerCaptionPrimeRetry(videoId, selected.track, state.targetLang, requestId);
+        }
+        return fetchBestPair(selected.track, manualTargetTrack, state.targetLang, {
+          allowTargetWithoutSource: !manualTargetTrack && !machineFirst && !!(playerPrime && playerPrime.ok),
+          preferNativeTarget: !manualTargetTrack && !!(playerPrime && playerPrime.ok),
           fullTargetCandidateSet: false,
           targetRetryAttempt: app.targetCueRetryCount,
           onSourceCues: function (sourceCues) {
-            if (machineFirst) {
+            if (machineFirst && !manualTargetTrack) {
               enableMachineTranslateFallback(selected.track, state.targetLang, 'source-ready', 'primary');
               clearMachinePromptState();
             }
@@ -3915,6 +3939,7 @@
         nativeTargetFallbackPreserve: app.nativeTargetFallbackPreserve,
         nativeTargetFallbackReason: app.nativeTargetFallbackReason,
         nativeTargetFallbackText: app.nativeTargetFallbackText,
+        nativeCaptionSuppressed: isNativeCaptionSuppressed(),
         nativeDomObserver: formatNativeDomObserverStatus(),
         nativeDomObserverAt: app.nativeDomObserverAt,
         nativeTranslationTrigger: formatNativeTranslationTriggerStatus(),
@@ -4068,6 +4093,7 @@
       var target = fetchDiagnostics.target || '';
       if (!target) return '';
       if (target.indexOf('skip-source-empty') !== -1) return 'skipped-source-empty';
+      if (target.indexOf('manual-target') !== -1 && target.indexOf('->') === -1) return 'manual-target';
       if (target.indexOf(':native') !== -1) return 'native';
       if (target.indexOf('->') !== -1) return 'plain';
       return 'unknown';
@@ -4641,24 +4667,49 @@
     patchHistoryMethod('replaceState');
   }
 
-  function clearNativeCaptionWindow() {
-    var container = getCaptionContainer();
-    if (container) container.classList.remove('yds-native-mode');
+  function clearNativeCaptionWindow(options) {
+    options = options || {};
+    if (options.releaseSuppression || !shouldSuppressNativeCaptions()) {
+      setNativeCaptionSuppression(false);
+    } else {
+      setNativeCaptionSuppression(true);
+    }
     var node = document.getElementById(CONFIG.ids.nativeWindow);
     if (node) node.remove();
   }
 
   function preserveYouTubeNativeCaptionWindow() {
+    setNativeCaptionSuppression(false);
+  }
+
+  function shouldSuppressNativeCaptions() {
+    return !!(state && state.enabled && isWatchPage());
+  }
+
+  function suppressYouTubeNativeCaptionWindow() {
+    if (shouldSuppressNativeCaptions()) setNativeCaptionSuppression(true);
+  }
+
+  function setNativeCaptionSuppression(suppressed) {
+    var enabled = !!suppressed;
+    var player = getPlayer();
     var container = getCaptionContainer();
-    if (container) container.classList.remove('yds-native-mode');
+    if (player) player.classList.toggle('yds-native-suppressed', enabled);
+    if (container) container.classList.toggle('yds-native-mode', enabled);
+  }
+
+  function isNativeCaptionSuppressed() {
+    var player = getPlayer();
+    var container = getCaptionContainer();
+    return !!((player && player.classList.contains('yds-native-suppressed')) ||
+      (container && container.classList.contains('yds-native-mode')));
   }
 
   function ensureNativeCaptionWindow(preserveNativeCaptions) {
-    var container = getCaptionContainer();
     var player = getPlayer();
     if (!player) return null;
 
-    if (container) container.classList.toggle('yds-native-mode', !preserveNativeCaptions);
+    setNativeCaptionSuppression(!preserveNativeCaptions);
     var node = document.getElementById(CONFIG.ids.nativeWindow);
     if (!node) {
       node = document.createElement('div');
@@ -5119,6 +5170,26 @@
     return prefixIndex === -1 ? null : tracks[prefixIndex];
   }
 
+  function findManualTargetTrack(tracks, targetLang, excludeIndex) {
+    if (!targetLang) return null;
+
+    var exactIndex = findTrackIndex(tracks || [], function (track, index) {
+      return index !== excludeIndex &&
+        getUsableTrack(track) &&
+        !isAutoGeneratedCaptionTrack(track) &&
+        String(track.languageCode || '') === String(targetLang || '');
+    });
+    if (exactIndex !== -1) return tracks[exactIndex];
+
+    var familyIndex = findTrackIndex(tracks || [], function (track, index) {
+      return index !== excludeIndex &&
+        getUsableTrack(track) &&
+        !isAutoGeneratedCaptionTrack(track) &&
+        isSameLanguageFamily(track.languageCode, targetLang);
+    });
+    return familyIndex === -1 ? null : tracks[familyIndex];
+  }
+
   function isSameLanguageFamily(left, right) {
     var a = String(left || '').toLowerCase().split('-')[0];
     var b = String(right || '').toLowerCase().split('-')[0];
@@ -5358,6 +5429,12 @@
     if (sourceTrack && sourceTrack.translationLanguages) raw = raw.concat(sourceTrack.translationLanguages);
     for (i = 0; i < (tracks || []).length; i++) {
       if (tracks[i] && tracks[i].translationLanguages) raw = raw.concat(tracks[i].translationLanguages);
+      if (tracks[i] && getUsableTrack(tracks[i]) && !isAutoGeneratedCaptionTrack(tracks[i])) {
+        raw.push({
+          languageCode: tracks[i].languageCode,
+          languageName: getTrackName(tracks[i])
+        });
+      }
     }
     return normalizeTranslationLanguages(raw, sourceTrack);
   }
@@ -5739,12 +5816,21 @@
     }).then(function (sourceCues) {
       if (sourceCues.length) {
         if (typeof options.onSourceCues === 'function') options.onSourceCues(sourceCues);
-        return fetchTargetPair(sourceCues, targetTrack, sourceTrack, targetLang, '', options);
+        if (targetTrack) {
+          return fetchTargetPair(sourceCues, targetTrack, sourceTrack, targetLang, 'manual-target', options).then(function (manualResult) {
+            if (manualResult.cuesB && manualResult.cuesB.length) return manualResult;
+            var manualDiagnostic = fetchDiagnostics.target || 'manual-target';
+            return fetchTargetPair(sourceCues, null, sourceTrack, targetLang, manualResult.fallback || 'manual-target-empty', mergeObjects(options, {
+              diagnosticPrefix: manualDiagnostic + ' | manual-target-fallback'
+            }));
+          });
+        }
+        return fetchTargetPair(sourceCues, null, sourceTrack, targetLang, '', options);
       }
 
       if (options.allowTargetWithoutSource && targetLang) {
         appendFetchDiagnostic('source', 'source-empty-target-allowed');
-        return fetchTargetPair([], targetTrack, sourceTrack, targetLang, 'source-empty-target-only', options).then(function (result) {
+        return fetchTargetPair([], targetTrack, sourceTrack, targetLang, targetTrack ? 'source-empty-manual-target-only' : 'source-empty-target-only', options).then(function (result) {
           if ((result.cuesA && result.cuesA.length) || (result.cuesB && result.cuesB.length) || !getNativeTimedTextHint(sourceTrack)) {
             return result;
           }
@@ -5792,13 +5878,18 @@
       });
     }
 
+    var manualTarget = !!(targetTrack && !isAutoGeneratedCaptionTrack(targetTrack));
     var retryable = !fallback || String(fallback).indexOf('transcript') === -1;
+    if (manualTarget) appendFetchDiagnostic('target', 'manual-target:' + (targetTrack.languageCode || targetLang || 'target'));
     return fetchTrackCues(track, language, 'target', {
+      diagnosticPrefix: options.diagnosticPrefix || (manualTarget ? 'manual-target:' + (targetTrack.languageCode || targetLang || 'target') : ''),
       fullCandidateSet: !!options.fullTargetCandidateSet,
-      preferNative: !!options.preferNativeTarget,
+      preferNative: !manualTarget && !!options.preferNativeTarget,
       targetRetryAttempt: options.targetRetryAttempt || 0
     }).then(function (targetCues) {
-      var synced = syncAutoGeneratedTargetCues(sourceCues || [], targetCues || [], sourceTrack);
+      var synced = manualTarget
+        ? { cues: copyCueList(targetCues || []), status: targetCues && targetCues.length ? 'manual-target' : 'off', detail: '' }
+        : syncAutoGeneratedTargetCues(sourceCues || [], targetCues || [], sourceTrack);
       return {
         cuesA: sourceCues || [],
         cuesB: synced.cues || [],
@@ -5933,7 +6024,7 @@
 
   function fetchTrackCues(track, targetLang, label, options) {
     options = options || {};
-    var attempts = [];
+    var attempts = options.diagnosticPrefix ? [options.diagnosticPrefix] : [];
     var rateLimitedErr = null;
 
     function summarizeUrl(candidate) {

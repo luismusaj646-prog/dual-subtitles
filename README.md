@@ -9,9 +9,11 @@ YouTube 双字幕 Tampermonkey 脚本。
 ## 功能
 
 - 第一行显示 YouTube 原字幕轨文本。
-- 第二行先显示 `translate.googleapis.com` 的逐句机翻。
+- 如果视频本身带有目标语言人工字幕，第二行优先使用这条人工字幕轨。
+- 没有可用人工字幕时，第二行先显示 `translate.googleapis.com` 的逐句机翻。
 - 后台继续运行 4.1 风格的 YouTube 预热、`tlang` 自动翻译和原生 DOM 监听；YouTube 译文稳定可用后平滑接管，机翻继续作为兜底。
-- 不把页面已有的目标语言字幕轨当成第二行替代品。
+- 自动产生字幕轨会尽量使用同源 ASR 原文和译文，并对轻微错位做吸附对齐。
+- 脚本启用时会压制 YouTube 原生字幕层，减少加载瞬间原生字幕闪现。
 - 字幕层放在 YouTube 播放器里。
 - 面板按钮放在 YouTube 视频下方操作按钮区域。
 - UI 默认跟随浏览器语言，也可以在面板里手动切换。
@@ -85,11 +87,15 @@ window.__ydsDebug.snapshot()
 - `cuesA` 是原文 cue 数
 - `cuesB` 是译文 cue 数
 - `targetLang` 是当前目标语言
+- `translationRequest` 为 `manual-target` 时代表正在使用视频自带人工翻译字幕
+- `targetProvider` 显示当前译文来源是 YouTube 还是机翻
+- `nativeCaptionSuppressed` 为 `true` 时代表 YouTube 原生字幕层已被脚本压制
 - `fetch.target` 能看到 YouTube `tlang` 请求是否成功
 
 常见情况：
 
-- `cuesA > 0` 且 `cuesB = 0`：原文可用，但 YouTube 当前没有返回自动翻译；换目标语言或点“重载”确认。
+- `translationRequest = manual-target`：正在优先使用视频自带的人工目标字幕轨。
+- `cuesA > 0` 且 `cuesB = 0`：原文可用，但人工目标轨、YouTube 自动翻译或机翻当前没有返回可显示译文；换目标语言或点“重载”确认。
 - `cuesA = 0`：当前原字幕轨没有可用 cue；切换“原字幕轨”或换视频。
 - `displayMode = source`：当前是只显示原文，切回 `原文 + 译文`。
 - `enabled = false`：面板里点“开启双字幕”。
@@ -113,5 +119,7 @@ npm run test:tampermonkey -- "https://www.youtube.com/watch?v=VIDEO_ID"
 开发时编辑 `src/yt-dual-subs.user.js`，然后执行 `npm run build` 生成根目录的 `yt-dual-subs.user.js`。
 
 GitHub Actions 会在 push 和 PR 时运行确定性的本地测试；`workflow_dispatch` 手动触发时会额外运行真实 YouTube smoke。
+
+GreasyFork 已通过 GitHub webhook 连接到本仓库；push 到 `master` 后，GreasyFork 会自动从 raw 同步脚本。若需要立即确认，可在 GreasyFork 管理页查看同步状态。
 
 更多测试说明见 [docs/testing.md](docs/testing.md)。

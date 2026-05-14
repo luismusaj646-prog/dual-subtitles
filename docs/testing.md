@@ -18,8 +18,10 @@ npm run test:tampermonkey -- "https://www.youtube.com/watch?v=VIDEO_ID"
 
 默认测试是确定性的，不访问真实 YouTube。覆盖：
 
-- 第一行使用原字幕轨，第二行始终使用同一原轨的 YouTube `tlang` 自动翻译
-- 即使页面存在目标语言字幕轨，也不拿它替代客户选择的自动翻译
+- 第一行使用原字幕轨；如果页面存在目标语言人工字幕轨，第二行优先使用人工字幕
+- 目标语言人工字幕为空或失败时，回退到同一原轨的 YouTube `tlang` 自动翻译
+- 没有可用人工目标轨时，机翻优先显示，YouTube 译文稳定后再接管
+- 脚本启用时压制 YouTube 原生字幕层，避免加载空窗期闪现原生字幕
 - timedtext 裸 `baseUrl` 为空时，复用 YouTube 原生播放器 timedtext 请求里的 `pot` 参数重试
 - timedtext 没有 cue 时回退到 transcript API
 - transcript API 不可用时回退到 transcript UI
@@ -59,7 +61,8 @@ npm run test:tampermonkey -- "https://www.youtube.com/watch?v=VIDEO_ID"
 - 页面加载后双字幕自动加载，面板默认不展开
 - `X` 按钮在 YouTube 视频下方操作按钮区域，不覆盖播放器
 - 打开面板后 UI 跟随 YouTube 浅色/深色主题
-- 第一行必须是原字幕轨，第二行必须是同一原轨的 YouTube `tlang` 自动翻译
+- 第一行必须是原字幕轨；有目标语言人工字幕时第二行优先使用人工字幕
+- 无人工目标字幕时，第二行先用机翻或 YouTube `tlang` 可用结果，YouTube 译文准备好后可接管
 - `显示模式` 切换只影响渲染，不改变已抓到的 cue
 - `自动避让控制栏` 是固定默认行为，没有 UI 开关；双字幕样式保持稳定，不再跟随 YouTube 原生字幕动态变化
 
@@ -146,4 +149,7 @@ Tampermonkey 真实测试报告里也会记录这些字段，并额外保存截�
 - `snapshot.cuesA`
 - `snapshot.cuesB`
 - `snapshot.fetch.target`
+- `snapshot.translationRequest`
+- `snapshot.targetProvider`
+- `snapshot.nativeCaptionSuppressed`
 - `cueProbe.text`
