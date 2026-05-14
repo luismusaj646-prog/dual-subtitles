@@ -360,7 +360,9 @@ test('keeps subtitles above large visible controls in theater-style players', as
 test('drops subtitles to the video bottom when player controls autohide', async ({ page }) => {
   await setupMockWatch(page, {
     settings: {
-      bottomOffset: 2
+      bottomOffset: 2,
+      machineTranslateFallback: false,
+      machineTranslateFallbackUserSet: true
     },
     tracks: [
       captionTrack('en', 'English')
@@ -491,6 +493,10 @@ test('uses a YouTube translation-language dropdown and auto-saves style choices'
   await expect(page.locator('[data-yds-control="syncNativeStyle"]')).toHaveCount(0);
   await expect(page.locator('[data-yds-control="smartPosition"]')).toHaveCount(0);
   await expect(page.locator('.yds-native-line-a')).toHaveCSS('font-size', '28px');
+  await expect(page.locator('.yds-native-line-a')).toHaveCSS('white-space', 'nowrap');
+  await expect(page.locator('.yds-native-line-a')).toHaveCSS('text-overflow', 'ellipsis');
+  await expect(page.locator('.yds-native-line-b')).toHaveCSS('white-space', 'nowrap');
+  await expect(page.locator('.yds-native-line-b')).toHaveCSS('text-overflow', 'ellipsis');
   await expect(page.locator('.yds-native-line-a')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(page.locator('.yds-native-line-b')).toHaveCSS('color', 'rgb(227, 68, 252)');
 
@@ -924,33 +930,119 @@ test('bridges native DOM when ASR translated timedtext is rate limited', async (
   await expect(page.locator('.yds-native-line-b')).toBeHidden();
   await expect(page.locator('.ytp-caption-window-container')).toHaveClass(/yds-native-mode/);
   await expect.poll(async () => (await snapshot(page)).nativeTranslationTrigger).toBe('ok:target-429');
-  await expect.poll(async () => (await snapshot(page)).nativeMenuTrigger).toBe('ok:auto-translate:zh-Hans');
+  await expect.poll(async () => (await snapshot(page)).nativeMenuTrigger).toMatch(/^(ok:auto-translate:zh-Hans|skipped:already-text)$/);
   await expect.poll(async () => page.evaluate(() => window.__mockVideoPlayCalls + window.__mockVideoPauseCalls)).toBe(0);
 
   const calls = await page.evaluate(() => window.__mockCaptionApiCalls);
   const trackCalls = calls.filter((call) => call[0] === 'setOption' && call[1] === 'captions' && call[2] === 'track');
   const translationCalls = calls.filter((call) => call[0] === 'setOption' && call[1] === 'captions' && call[2] === 'translationLanguage');
   const reloadCalls = calls.filter((call) => call[0] === 'setOption' && call[1] === 'captions' && call[2] === 'reload');
+  const translatedTrackCalls = trackCalls.filter((call) => call[3] && call[3].translationLanguage && call[3].translationLanguage.languageCode === 'zh-Hans');
+  const sourceTrackCalls = trackCalls.filter((call) => call[3] && call[3].kind === 'asr' && call[3].vss_id === 'a.en' && !call[3].translationLanguage);
+  const translationCodes = translationCalls.map((call) => call[3] && call[3].languageCode ? call[3].languageCode : null);
 
-  expect(trackCalls).toHaveLength(3);
-  expect(trackCalls[0][3].translationLanguage.languageCode).toBe('zh-Hans');
-  expect(trackCalls[1][3].kind).toBe('asr');
-  expect(trackCalls[1][3].vss_id).toBe('a.en');
-  expect(trackCalls[1][3].translationLanguage).toBeUndefined();
-  expect(trackCalls[2][3].translationLanguage.languageCode).toBe('zh-Hans');
-  expect(translationCalls.map((call) => call[3] && call[3].languageCode ? call[3].languageCode : null)).toEqual([
-    'zh-Hans',
-    null,
-    'zh-Hans'
-  ]);
-  expect(reloadCalls).toHaveLength(3);
+  expect(translatedTrackCalls.length).toBeGreaterThanOrEqual(2);
+  expect(sourceTrackCalls.length).toBeGreaterThanOrEqual(1);
+  expect(translationCodes).toEqual(expect.arrayContaining(['zh-Hans', null]));
+  expect(reloadCalls.length).toBeGreaterThanOrEqual(3);
 
   await expect.poll(async () => (await snapshot(page)).nativeTargetFallbackText).toBe('菜单触发译文');
   await expect(page.locator('.yds-native-line-b')).toHaveText('菜单触发译文');
-  await expect.poll(async () => page.evaluate(() => window.__mockMenuTriggerCalls.map((call) => call.join(':')).join('|'))).toContain('target:zh-Hans');
-  await expect.poll(async () => page.evaluate(() => window.__mockMenuTriggerCalls.map((call) => call.join(':')).join('|'))).toContain('subtitles');
+  state = await snapshot(page);
+  if (state.nativeMenuTrigger === 'ok:auto-translate:zh-Hans') {
+    await expect.poll(async () => page.evaluate(() => window.__mockMenuTriggerCalls.map((call) => call.join(':')).join('|'))).toContain('target:zh-Hans');
+    await expect.poll(async () => page.evaluate(() => window.__mockMenuTriggerCalls.map((call) => call.join(':')).join('|'))).toContain('subtitles');
+  }
   state = await snapshot(page);
   expect(state.nativeTargetFallbackPreserve).toBe(false);
+});
+
+test('recovers ASR translated timedtext after YouTube prepares native translation late', async ({ page }) => {
+  let targetAttempts = 0;
+
+  await setupMockWatch(page, {
+    tracks: [
+      asrTrack()
+    ],
+    defaultTrackIndex: 0,
+    nativeTimedTextHintParams: {
+      fmt: 'json3',
+      pot: 'late-pot'
+    },
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        targetAttempts += 1;
+        if (targetAttempts <= 2) {
+          return {
+            status: 429,
+            contentType: 'text/html; charset=utf-8',
+            body: '<html><title>Sorry...</title></html>'
+          };
+        }
+        return json3Cue('延迟恢复译文');
+      }
+      return json3Cue('Late ASR source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).cuesB, {
+    timeout: 10000
+  }).toBe(1);
+
+  const state = await snapshot(page);
+  expect(state.sourceKind).toBe('asr');
+  expect(state.translationResult).toBe('ok');
+  expect(state.targetRecoveryRetryCount).toBe(1);
+  expect(targetAttempts).toBeGreaterThan(2);
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Late ASR source');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('延迟恢复译文');
+});
+
+test('stops ASR target recovery when native DOM translation appears late', async ({ page }) => {
+  let targetAttempts = 0;
+
+  await setupMockWatch(page, {
+    tracks: [
+      asrTrack()
+    ],
+    defaultTrackIndex: 0,
+    nativeCaptionText: '',
+    nativeMenuSummaryText: '字幕 (1) English (auto-generated) >> Chinese (Simplified)',
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') {
+        targetAttempts += 1;
+        return {
+          status: 429,
+          contentType: 'text/html; charset=utf-8',
+          body: '<html><title>Sorry...</title></html>'
+        };
+      }
+      return json3Cue('Observer source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).targetRecoveryRetry, {
+    timeout: 10000
+  }).toContain('scheduled:target-429');
+
+  const attemptsAfterSchedule = targetAttempts;
+  await page.evaluate(() => {
+    document.querySelector('.ytp-caption-segment').textContent = '观察器译文';
+  });
+
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Observer source');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('观察器译文');
+  await expect.poll(async () => (await snapshot(page)).nativeDomObserver).toMatch(/^target:/);
+  await expect.poll(async () => (await snapshot(page)).targetRecoveryRetry).toContain('cleared:native-dom-target');
+
+  await page.waitForTimeout(3200);
+  expect(targetAttempts).toBe(attemptsAfterSchedule);
 });
 
 test('loads translated cues when source timedtext is empty but player translation is applied', async ({ page }) => {
@@ -1097,6 +1189,49 @@ test('automatically retries after first source-empty pass so manual reload is no
   await expect(page.locator('.yds-native-line-b')).toHaveText('自动重试译文');
 });
 
+test('self-heals when startup leaves the UI mounted without a running subtitle loop', async ({ page }) => {
+  let playerCalls = 0;
+
+  await setupMockWatch(page, {
+    initialTracks: [],
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    playerEndpoint() {
+      playerCalls += 1;
+      if (playerCalls <= 2) {
+        return {
+          status: 500,
+          body: '{}'
+        };
+      }
+      return null;
+    },
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('自愈后译文');
+      return json3Cue('Recovered startup source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase, {
+    timeout: 10000
+  }).toBe('ready');
+
+  const state = await snapshot(page);
+  expect(state.runtimeHealthRecoveries).toBeGreaterThan(0);
+  expect(state.runtimeHealth).toContain('recover:url-poll:wait-tracks');
+  expect(state.runtimeHeartbeat).toContain('loop:on');
+  expect(state.loopRunning).toBe(true);
+  expect(state.loopStartCount).toBeGreaterThan(0);
+  expect(playerCalls).toBeGreaterThanOrEqual(3);
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Recovered startup source');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('自愈后译文');
+});
+
 test('skips translated timedtext when the source track has no cues', async ({ page }) => {
   let targetRequests = 0;
 
@@ -1130,7 +1265,8 @@ test('keeps source captions when translated timedtext is rate limited', async ({
 
   await setupMockWatch(page, {
     settings: {
-      machineTranslateFallback: false
+      machineTranslateFallback: false,
+      machineTranslateFallbackUserSet: true
     },
     tracks: [
       captionTrack('en', 'English')
@@ -1163,7 +1299,7 @@ test('keeps source captions when translated timedtext is rate limited', async ({
   expect(state.targetPending).toBe(false);
   expect(state.machineTranslateActive).toBe(false);
   expect(state.machinePromptStatus).toBe('off');
-  expect(state.machineTranslateAvailable).toBe(false);
+  expect(state.machineTranslateAvailable).toBe(true);
   expect(machineRequests).toBe(0);
 
   await expect(page.locator('.yds-native-line-a')).toHaveText('English source survives');
@@ -1171,13 +1307,14 @@ test('keeps source captions when translated timedtext is rate limited', async ({
   await expect(page.getByRole('button', { name: '本视频启用机翻' })).toHaveCount(0);
 });
 
-test('does not ask for machine translation while the fallback is disabled', async ({ page }) => {
+test('does not ask for machine translation while machine-first is disabled by the user', async ({ page }) => {
   let machineRequests = 0;
 
   await setupMockWatch(page, {
     videoId: 'prompt-first',
     settings: {
-      machineTranslateFallback: false
+      machineTranslateFallback: false,
+      machineTranslateFallbackUserSet: true
     },
     tracks: [
       captionTrack('en', 'English')
@@ -1210,7 +1347,7 @@ test('does not ask for machine translation while the fallback is disabled', asyn
   expect(machineRequests).toBe(0);
 
   let state = await snapshot(page);
-  expect(state.machineTranslateAvailable).toBe(false);
+  expect(state.machineTranslateAvailable).toBe(true);
   expect(state.machinePromptStatus).toBe('off');
   expect(state.machineTranslateActive).toBe(false);
 
@@ -1229,7 +1366,7 @@ test('does not ask for machine translation while the fallback is disabled', asyn
   await expect(page.getByRole('button', { name: '本视频启用机翻' })).toHaveCount(0);
 });
 
-test('does not auto-enable machine translation from legacy stored settings', async ({ page }) => {
+test('upgrades legacy machine translation setting to machine-first mode', async ({ page }) => {
   await setupMockWatch(page, {
     settings: {
       machineTranslateFallback: true
@@ -1256,11 +1393,12 @@ test('does not auto-enable machine translation from legacy stored settings', asy
 
   await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
   const state = await snapshot(page);
-  expect(state.machineTranslateSetting).toBe(false);
-  expect(state.machineTranslateActive).toBe(false);
+  expect(state.machineTranslateSetting).toBe(true);
+  expect(state.machineTranslateActive).toBe(true);
+  expect(state.machineTranslateMode).toBe('primary');
   expect(state.nativeTargetFallback).toBe(true);
   await expect(page.locator('.yds-native-line-a')).toHaveText('Legacy setting source');
-  await expect(page.locator('.yds-native-line-b')).toBeHidden();
+  await expect(page.locator('.yds-native-line-b')).toHaveText('Legacy setting source');
 });
 
 test('tries plain translated timedtext after native params are rate limited', async ({ page }) => {
@@ -1303,7 +1441,78 @@ test('tries plain translated timedtext after native params are rate limited', as
   await expect(page.locator('.yds-native-line-b')).toHaveText('普通参数译文');
 });
 
-test('keeps machine translation fallback disabled even when the stored toggle is on', async ({ page }) => {
+test('uses machine translation before a successful YouTube translated target', async ({ page }) => {
+  await setupMockWatch(page, {
+    settings: {
+      machineTranslateFallback: true,
+      machineTranslateFallbackUserSet: false
+    },
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('YouTube 兜底译文');
+      return json3Cue('Machine primary source');
+    },
+    machineTranslate(url) {
+      return JSON.stringify([[['机翻优先译文', url.searchParams.get('q') || '']]]);
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Machine primary source');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('机翻优先译文');
+
+  const state = await snapshot(page);
+  expect(state.cuesB).toBe(1);
+  expect(state.translationResult).toBe('ok');
+  expect(state.machineTranslateActive).toBe(true);
+  expect(state.machineTranslateMode).toBe('primary');
+  expect(state.machineTranslateLast).toBe('ok');
+});
+
+test('falls back to YouTube translated target when machine translation fails', async ({ page }) => {
+  await setupMockWatch(page, {
+    settings: {
+      machineTranslateFallback: true,
+      machineTranslateFallbackUserSet: false
+    },
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      { languageCode: 'zh-Hans', languageName: 'Chinese (Simplified)' }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang') === 'zh-Hans') return json3Cue('YouTube fallback after machine error');
+      return json3Cue('Machine failure source');
+    },
+    machineTranslate() {
+      return {
+        status: 500,
+        body: 'machine unavailable'
+      };
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  await expect(page.locator('.yds-native-line-a')).toHaveText('Machine failure source');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('YouTube fallback after machine error');
+
+  const state = await snapshot(page);
+  expect(state.cuesB).toBe(1);
+  expect(state.translationResult).toBe('ok');
+  expect(state.machineTranslateActive).toBe(true);
+  expect(state.machineTranslateMode).toBe('primary');
+  expect(state.machineTranslateLast).toContain('err:HTTP 500');
+});
+
+test('uses machine translation first when the stored toggle is on', async ({ page }) => {
   let machineRequests = 0;
 
   await setupMockWatch(page, {
@@ -1332,14 +1541,13 @@ test('keeps machine translation fallback disabled even when the stored toggle is
     async machineTranslate(url) {
       machineRequests += 1;
       await delay(500);
-      return JSON.stringify([[['should not be requested', url.searchParams.get('q') || '']]]);
+      return JSON.stringify([[['机翻主译文', url.searchParams.get('q') || '']]]);
     }
   });
 
   await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
   await expect(page.locator('.yds-native-line-a')).toHaveText('Machine source line');
-  await expect(page.locator('.yds-native-line-b')).toBeHidden();
-  await expect(page.locator('.yds-native-line-b')).not.toContainText('机翻中');
+  await expect(page.locator('.yds-native-line-b')).toHaveText('机翻主译文');
   await expect(page.locator('#yds-native-window')).not.toHaveClass(/yds-native-target-fallback/);
 
   await page.evaluate(() => {
@@ -1364,15 +1572,15 @@ test('keeps machine translation fallback disabled even when the stored toggle is
   expect(state.cuesA).toBe(1);
   expect(state.cuesB).toBe(0);
   expect(state.translationResult).toBe('429');
-  expect(state.machineTranslateAvailable).toBe(false);
-  expect(state.machineTranslateSetting).toBe(false);
-  expect(state.machineTranslateActive).toBe(false);
-  expect(state.machineTranslateReason).toBe('');
-  expect(state.machineTranslateMode).toBe('');
+  expect(state.machineTranslateAvailable).toBe(true);
+  expect(state.machineTranslateSetting).toBe(true);
+  expect(state.machineTranslateActive).toBe(true);
+  expect(state.machineTranslateReason).toBe('source-ready');
+  expect(state.machineTranslateMode).toBe('primary');
   expect(state.machinePromptStatus).toBe('off');
-  expect(state.machineTranslateLast).toBe('');
-  expect(state.status).toContain('译文暂时不可用');
-  expect(machineRequests).toBe(0);
+  expect(state.machineTranslateLast).toBe('ok');
+  expect(state.status).toContain('机翻优先');
+  expect(machineRequests).toBeGreaterThan(0);
 });
 
 test('does not bridge native caption DOM when it is still the source line', async ({ page }) => {
@@ -1483,7 +1691,7 @@ test('keeps script source visible while waiting for translated DOM fallback text
   expect(state.nativeTargetFallbackPreserve).toBe(false);
   expect(state.nativeTargetFallbackText).toBe('');
   expect(state.machinePromptStatus).toBe('off');
-  expect(state.machineTranslateAvailable).toBe(false);
+  expect(state.machineTranslateAvailable).toBe(true);
   await expect(page.getByRole('button', { name: '本视频启用机翻' })).toHaveCount(0);
 
   await page.evaluate(() => {

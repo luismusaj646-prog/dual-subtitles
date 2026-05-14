@@ -2,15 +2,15 @@
 
 YouTube 双字幕 Tampermonkey 脚本。
 
-当前版本：`4.2.40`
+当前版本：`4.2.45`
 
 项目地址：https://github.com/luismusaj646-prog/dual-subtitles
 
 ## 功能
 
 - 第一行显示 YouTube 原字幕轨文本。
-- 第二行显示同一原字幕轨通过 YouTube `tlang` 得到的自动翻译。
-- YouTube 译文受限且原生字幕没有译文时，可用 `translate.googleapis.com` 做逐句机翻兜底。
+- 第二行默认优先显示 `translate.googleapis.com` 的逐句机翻。
+- YouTube `tlang` 自动翻译和原生字幕 DOM 译文作为机翻不可用时的兜底。
 - 不把页面已有的目标语言字幕轨当成第二行替代品。
 - 字幕层放在 YouTube 播放器里。
 - 面板按钮放在 YouTube 视频下方操作按钮区域。
@@ -51,10 +51,10 @@ https://raw.githubusercontent.com/luismusaj646-prog/dual-subtitles/master/yt-dua
 ## 权限与隐私
 
 - 运行页面：`https://www.youtube.com/watch*`
-- 网络连接：`www.youtube.com`
+- 网络连接：`www.youtube.com`、`translate.googleapis.com`
 - 本地存储：保存字幕样式、语言和显示设置。
 
-脚本只请求 YouTube 自身的字幕和 transcript 数据，不把字幕文本发送给第三方翻译、统计或广告服务。
+脚本会请求 YouTube 字幕数据；默认机翻优先开启时，会把当前字幕句子发送到 Google Translate 公共接口 `translate.googleapis.com` 获取译文。脚本不发送统计或广告请求。
 
 ## 使用
 

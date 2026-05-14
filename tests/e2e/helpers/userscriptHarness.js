@@ -53,12 +53,13 @@ async function setupMockWatch(page, options = {}) {
   const defaultTrackIndex = typeof options.defaultTrackIndex === 'number' ? options.defaultTrackIndex : -1;
 
   await page.route('https://www.youtube.com/watch**', async (route) => {
+    const initialTracks = Object.prototype.hasOwnProperty.call(options, 'initialTracks') ? options.initialTracks : tracks;
     await route.fulfill({
       status: 200,
       contentType: 'text/html; charset=utf-8',
       body: buildWatchHtml({
         defaultTrackIndex,
-        nativeTimedTextHintUrl: buildNativeTimedTextHintUrl(tracks, options.nativeTimedTextHintParams),
+        nativeTimedTextHintUrl: buildNativeTimedTextHintUrl(initialTracks, options.nativeTimedTextHintParams),
         nativeTimedTextHintAutoRequest: options.nativeTimedTextHintAutoRequest !== false,
         allowNativeHintWait: !!options.allowNativeHintWait,
         playerCaptionApi: options.playerCaptionApi === undefined ? true : options.playerCaptionApi,
@@ -68,7 +69,7 @@ async function setupMockWatch(page, options = {}) {
         nativeMenuTranslatedText: options.nativeMenuTranslatedText,
         subtitleIgnoreFirstClick: !!options.subtitleIgnoreFirstClick,
         subtitleToggleDelayMs: options.subtitleToggleDelayMs || 0,
-        tracks,
+        tracks: initialTracks,
         translationLanguages: options.translationLanguages || [],
         transcriptUiSegments: options.transcriptUiSegments || [],
         videoId
@@ -109,14 +110,21 @@ async function setupMockWatch(page, options = {}) {
   });
 
   await page.route('https://www.youtube.com/youtubei/v1/player**', async (route) => {
+    const defaultBody = buildPlayerResponse({
+      defaultTrackIndex,
+      tracks,
+      translationLanguages: options.translationLanguages || []
+    });
+    const result = options.playerEndpoint ? await options.playerEndpoint(route.request()) : null;
+    const response = result && typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, 'body')
+      ? result
+      : {
+          body: result || defaultBody
+        };
     await route.fulfill({
-      status: 200,
+      status: response.status || 200,
       contentType: 'application/json; charset=utf-8',
-      body: JSON.stringify(buildPlayerResponse({
-        defaultTrackIndex,
-        tracks,
-        translationLanguages: options.translationLanguages || []
-      }))
+      body: typeof response.body === 'string' ? response.body : JSON.stringify(response.body)
     });
   });
 
@@ -198,10 +206,16 @@ async function setupMockWatch(page, options = {}) {
   await page.goto(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&ydsDebug=1`, {
     waitUntil: 'domcontentloaded'
   });
-  if (options.settings) {
+  const settings = Object.prototype.hasOwnProperty.call(options, 'settings')
+    ? options.settings
+    : {
+        machineTranslateFallback: false,
+        machineTranslateFallbackUserSet: true
+      };
+  if (settings) {
     await page.evaluate((settings) => {
       window.localStorage.setItem('__yds_gm__yds_native_settings_v2', JSON.stringify(settings));
-    }, options.settings);
+    }, settings);
   }
   await injectUserscript(page);
 }
