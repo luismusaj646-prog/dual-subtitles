@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Dual Native Subs
 // @namespace    https://github.com/luismusaj646-prog/dual-subtitles
-// @version      4.2.0
+// @version      4.2.1
 // @description  Native dual subtitles for YouTube
 // @license      GPL-3.0-only
 // @homepageURL  https://github.com/luismusaj646-prog/dual-subtitles
@@ -23,7 +23,7 @@
   'use strict';
 
   var SCRIPT_NAME = 'yt-dual-subs';
-  var SCRIPT_VERSION = '4.2.0';
+  var SCRIPT_VERSION = '4.2.1';
   var SETTINGS_KEY = 'yds_native_settings_v2';
   var RUNTIME_KEY = '__ydsRuntime';
   var DEBUG_API_KEY = '__ydsDebug';
@@ -138,6 +138,7 @@
   var DEFAULTS = {
     targetLang: 'zh-Hans',
     targetLangBySource: {},
+    uiLang: 'auto',
     sourceTrackIndex: 0,
     enabled: true,
     displayMode: 'dual',
@@ -159,21 +160,35 @@
   };
 
   var FONT_OPTIONS = [
-    { value: 'system', label: '\u7CFB\u7EDF\u9ED8\u8BA4', css: 'system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif' },
+    { value: 'system', labelKey: 'fontSystem', label: '\u7CFB\u7EDF\u9ED8\u8BA4', css: 'system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif' },
     { value: 'youtube', label: 'YouTube Sans', css: '"YouTube Sans","Roboto",Arial,sans-serif' },
     { value: 'arial', label: 'Arial', css: 'Arial,"Helvetica Neue",sans-serif' },
     { value: 'roboto', label: 'Roboto', css: '"Roboto",Arial,sans-serif' },
     { value: 'segoe', label: 'Segoe UI', css: '"Segoe UI",Arial,sans-serif' },
-    { value: 'microsoft-yahei', label: '\u5FAE\u8F6F\u96C5\u9ED1', css: '"Microsoft YaHei","Segoe UI",Arial,sans-serif' },
+    { value: 'microsoft-yahei', labelKey: 'fontMicrosoftYahei', label: '\u5FAE\u8F6F\u96C5\u9ED1', css: '"Microsoft YaHei","Segoe UI",Arial,sans-serif' },
     { value: 'noto-sans', label: 'Noto Sans', css: '"Noto Sans","Noto Sans SC",Arial,sans-serif' },
-    { value: 'serif', label: '\u886C\u7EBF', css: 'Georgia,"Times New Roman",serif' },
-    { value: 'mono', label: '\u7B49\u5BBD', css: '"Cascadia Mono","Consolas",monospace' }
+    { value: 'serif', labelKey: 'fontSerif', label: '\u886C\u7EBF', css: 'Georgia,"Times New Roman",serif' },
+    { value: 'mono', labelKey: 'fontMono', label: '\u7B49\u5BBD', css: '"Cascadia Mono","Consolas",monospace' }
   ];
 
-  var TEXT = {
+  var UI_LANGUAGE_OPTIONS = [
+    { value: 'auto', label: 'Auto' },
+    { value: 'zh-Hans', label: '简体中文' },
+    { value: 'zh-Hant', label: '繁體中文' },
+    { value: 'en', label: 'English' },
+    { value: 'ja', label: '日本語' },
+    { value: 'ko', label: '한국어' },
+    { value: 'es', label: 'Español' }
+  ];
+
+  var TEXT_PACKS = {
+    'zh-Hans': {
     title: '\u53CC\u5B57\u5E55',
     launcher: 'X',
     reload: '\u91CD\u8F7D',
+    close: '\u9690\u85CF',
+    uiLanguage: '界面语言',
+    uiLanguageAuto: '跟随浏览器',
     sourceTrack: '\u5F53\u524D\u539F\u8F68',
     displayMode: '\u663E\u793A\u6A21\u5F0F',
     modeDual: '\u539F\u6587 + \u8BD1\u6587',
@@ -194,6 +209,10 @@
     advancedTitle: '\u9AD8\u7EA7',
     resetStyle: '\u91CD\u7F6E\u6837\u5F0F',
     debug: 'debug',
+    fontSystem: '系统默认',
+    fontMicrosoftYahei: '微软雅黑',
+    fontSerif: '衬线',
+    fontMono: '等宽',
     injected: '\u811A\u672C\u5DF2\u6CE8\u5165',
     waitingWatchPage: '\u7B49\u5F85 watch \u9875\u9762',
     waitingPlayer: '\u7B49\u5F85\u64AD\u653E\u5668\u5B8C\u6210\u52A0\u8F7D',
@@ -222,7 +241,327 @@
     enableDualSubs: '\u5F00\u542F\u53CC\u5B57\u5E55',
     disableDualSubs: '\u5173\u95ED\u53CC\u5B57\u5E55',
     unselected: '\u672A\u9009\u62E9'
+    },
+    'zh-Hant': {
+      title: '雙字幕',
+      launcher: 'X',
+      reload: '重載',
+      close: '隱藏',
+      uiLanguage: '介面語言',
+      uiLanguageAuto: '跟隨瀏覽器',
+      sourceTrack: '目前原文軌',
+      displayMode: '顯示模式',
+      modeDual: '原文 + 譯文',
+      modeSource: '只顯示原文',
+      modeTarget: '只顯示譯文',
+      targetLang: '目標語言',
+      targetSearch: '搜尋語言',
+      targetSearchPlaceholder: '輸入語言或代碼',
+      trackIndex: '原字幕軌',
+      styleTitle: '字幕樣式',
+      sourceFontSize: '原文字號',
+      targetFontSize: '譯文字號',
+      lineGap: '行間距',
+      bottomOffset: '底部位置',
+      fontFamily: '字體',
+      sourceColor: '原文顏色',
+      targetColor: '譯文顏色',
+      advancedTitle: '進階',
+      resetStyle: '重設樣式',
+      debug: 'debug',
+      fontSystem: '系統預設',
+      fontMicrosoftYahei: '微軟雅黑',
+      fontSerif: '襯線',
+      fontMono: '等寬',
+      injected: '腳本已注入',
+      waitingWatchPage: '等待 watch 頁面',
+      waitingPlayer: '等待播放器完成載入',
+      waitingTracks: '等待字幕軌出現',
+      waitingCues: '等待 YouTube 字幕資料穩定',
+      loading: '正在載入...',
+      targetLoading: '譯文載入中 {seconds}s',
+      targetLoadingStatus: '原文已顯示，譯文載入中',
+      noTrack: '沒有可用字幕軌',
+      noTrackDetail: '這個影片沒有可用字幕軌',
+      noCue: '這條字幕軌暫時沒有返回可用內容',
+      nativeReady: '雙字幕已啟用',
+      nativeTargetFallbackReady: '雙字幕已啟用（譯文來自 YouTube 原生字幕）',
+      machineTranslateFallback: '機翻優先',
+      machineTranslateReady: '機翻優先已啟用，YouTube 譯文作為兜底',
+      machineTranslating: '機翻中...',
+      machinePromptStatus: 'YouTube 譯文受限',
+      machinePromptAccept: '本影片啟用機翻',
+      machinePromptDismiss: '暫不使用',
+      sourceOnly: '原文可用，譯文暫時不可用',
+      rateLimited: '翻譯被限流，60 秒後再試',
+      rateLimitedShort: '翻譯被限流，{seconds} 秒後自動重試',
+      rateLimitedWithSource: '原文可用，YouTube 暫時限制譯文，{seconds} 秒後自動重試',
+      loadFailed: '載入失敗: ',
+      disabled: '雙字幕已關閉',
+      enableDualSubs: '開啟雙字幕',
+      disableDualSubs: '關閉雙字幕',
+      unselected: '未選擇'
+    },
+    en: {
+      title: 'Dual Subs',
+      launcher: 'X',
+      reload: 'Reload',
+      close: 'Hide',
+      uiLanguage: 'UI language',
+      uiLanguageAuto: 'Follow browser',
+      sourceTrack: 'Current source',
+      displayMode: 'Display mode',
+      modeDual: 'Source + translation',
+      modeSource: 'Source only',
+      modeTarget: 'Translation only',
+      targetLang: 'Target language',
+      targetSearch: 'Search language',
+      targetSearchPlaceholder: 'Type a language or code',
+      trackIndex: 'Source caption track',
+      styleTitle: 'Subtitle style',
+      sourceFontSize: 'Source size',
+      targetFontSize: 'Translation size',
+      lineGap: 'Line gap',
+      bottomOffset: 'Bottom position',
+      fontFamily: 'Font',
+      sourceColor: 'Source color',
+      targetColor: 'Translation color',
+      advancedTitle: 'Advanced',
+      resetStyle: 'Reset style',
+      debug: 'debug',
+      fontSystem: 'System default',
+      fontMicrosoftYahei: 'Microsoft YaHei',
+      fontSerif: 'Serif',
+      fontMono: 'Monospace',
+      injected: 'Script injected',
+      waitingWatchPage: 'Waiting for watch page',
+      waitingPlayer: 'Waiting for player',
+      waitingTracks: 'Waiting for caption tracks',
+      waitingCues: 'Waiting for YouTube caption data',
+      loading: 'Loading...',
+      targetLoading: 'Translation loading {seconds}s',
+      targetLoadingStatus: 'Source is visible, translation is loading',
+      noTrack: 'No caption tracks available',
+      noTrackDetail: 'This video has no available caption tracks',
+      noCue: 'This caption track has not returned usable content yet',
+      nativeReady: 'Dual subtitles enabled',
+      nativeTargetFallbackReady: 'Dual subtitles enabled (translation from YouTube native captions)',
+      machineTranslateFallback: 'Machine translation first',
+      machineTranslateReady: 'Machine translation first enabled; YouTube translation is fallback',
+      machineTranslating: 'Machine translating...',
+      machinePromptStatus: 'YouTube translation is limited',
+      machinePromptAccept: 'Use machine translation for this video',
+      machinePromptDismiss: 'Not now',
+      sourceOnly: 'Source is available; translation is temporarily unavailable',
+      rateLimited: 'Translation is rate limited; trying again in 60 seconds',
+      rateLimitedShort: 'Translation is rate limited; retrying in {seconds}s',
+      rateLimitedWithSource: 'Source is available; YouTube is limiting translation. Retrying in {seconds}s',
+      loadFailed: 'Load failed: ',
+      disabled: 'Dual subtitles disabled',
+      enableDualSubs: 'Enable dual subtitles',
+      disableDualSubs: 'Disable dual subtitles',
+      unselected: 'Not selected'
+    },
+    ja: {
+      title: '二重字幕',
+      launcher: 'X',
+      reload: '再読み込み',
+      close: '隠す',
+      uiLanguage: 'UI 言語',
+      uiLanguageAuto: 'ブラウザに合わせる',
+      sourceTrack: '現在の原文トラック',
+      displayMode: '表示モード',
+      modeDual: '原文 + 翻訳',
+      modeSource: '原文のみ',
+      modeTarget: '翻訳のみ',
+      targetLang: '翻訳先言語',
+      targetSearch: '言語を検索',
+      targetSearchPlaceholder: '言語名またはコードを入力',
+      trackIndex: '原文字幕トラック',
+      styleTitle: '字幕スタイル',
+      sourceFontSize: '原文サイズ',
+      targetFontSize: '翻訳サイズ',
+      lineGap: '行間',
+      bottomOffset: '下位置',
+      fontFamily: 'フォント',
+      sourceColor: '原文色',
+      targetColor: '翻訳色',
+      advancedTitle: '詳細',
+      resetStyle: 'スタイルをリセット',
+      debug: 'debug',
+      fontSystem: 'システム既定',
+      fontMicrosoftYahei: 'Microsoft YaHei',
+      fontSerif: 'セリフ',
+      fontMono: '等幅',
+      injected: 'スクリプトを注入しました',
+      waitingWatchPage: 'watch ページを待機中',
+      waitingPlayer: 'プレイヤーを待機中',
+      waitingTracks: '字幕トラックを待機中',
+      waitingCues: 'YouTube 字幕データを待機中',
+      loading: '読み込み中...',
+      targetLoading: '翻訳を読み込み中 {seconds}s',
+      targetLoadingStatus: '原文を表示済み、翻訳を読み込み中',
+      noTrack: '利用可能な字幕トラックがありません',
+      noTrackDetail: 'この動画には利用可能な字幕トラックがありません',
+      noCue: 'この字幕トラックはまだ利用可能な内容を返していません',
+      nativeReady: '二重字幕が有効です',
+      nativeTargetFallbackReady: '二重字幕が有効です（翻訳は YouTube ネイティブ字幕）',
+      machineTranslateFallback: '機械翻訳を優先',
+      machineTranslateReady: '機械翻訳を優先し、YouTube 翻訳を予備にします',
+      machineTranslating: '機械翻訳中...',
+      machinePromptStatus: 'YouTube 翻訳が制限されています',
+      machinePromptAccept: 'この動画で機械翻訳を使う',
+      machinePromptDismiss: '今は使わない',
+      sourceOnly: '原文は利用可能ですが、翻訳は一時的に利用できません',
+      rateLimited: '翻訳が制限されています。60 秒後に再試行します',
+      rateLimitedShort: '翻訳が制限されています。{seconds} 秒後に再試行します',
+      rateLimitedWithSource: '原文は利用可能です。YouTube 翻訳が制限中のため {seconds} 秒後に再試行します',
+      loadFailed: '読み込み失敗: ',
+      disabled: '二重字幕はオフです',
+      enableDualSubs: '二重字幕をオン',
+      disableDualSubs: '二重字幕をオフ',
+      unselected: '未選択'
+    },
+    ko: {
+      title: '이중 자막',
+      launcher: 'X',
+      reload: '다시 불러오기',
+      close: '숨기기',
+      uiLanguage: 'UI 언어',
+      uiLanguageAuto: '브라우저 따르기',
+      sourceTrack: '현재 원문 트랙',
+      displayMode: '표시 모드',
+      modeDual: '원문 + 번역',
+      modeSource: '원문만',
+      modeTarget: '번역만',
+      targetLang: '대상 언어',
+      targetSearch: '언어 검색',
+      targetSearchPlaceholder: '언어 또는 코드 입력',
+      trackIndex: '원문 자막 트랙',
+      styleTitle: '자막 스타일',
+      sourceFontSize: '원문 크기',
+      targetFontSize: '번역 크기',
+      lineGap: '줄 간격',
+      bottomOffset: '하단 위치',
+      fontFamily: '글꼴',
+      sourceColor: '원문 색상',
+      targetColor: '번역 색상',
+      advancedTitle: '고급',
+      resetStyle: '스타일 초기화',
+      debug: 'debug',
+      fontSystem: '시스템 기본',
+      fontMicrosoftYahei: 'Microsoft YaHei',
+      fontSerif: '세리프',
+      fontMono: '고정폭',
+      injected: '스크립트가 주입됨',
+      waitingWatchPage: 'watch 페이지 대기 중',
+      waitingPlayer: '플레이어 대기 중',
+      waitingTracks: '자막 트랙 대기 중',
+      waitingCues: 'YouTube 자막 데이터 대기 중',
+      loading: '불러오는 중...',
+      targetLoading: '번역 불러오는 중 {seconds}s',
+      targetLoadingStatus: '원문이 표시되었고 번역을 불러오는 중',
+      noTrack: '사용 가능한 자막 트랙 없음',
+      noTrackDetail: '이 동영상에는 사용 가능한 자막 트랙이 없습니다',
+      noCue: '이 자막 트랙은 아직 사용 가능한 내용을 반환하지 않았습니다',
+      nativeReady: '이중 자막이 켜졌습니다',
+      nativeTargetFallbackReady: '이중 자막이 켜졌습니다(번역은 YouTube 기본 자막)',
+      machineTranslateFallback: '기계 번역 우선',
+      machineTranslateReady: '기계 번역 우선 사용, YouTube 번역은 예비로 사용',
+      machineTranslating: '기계 번역 중...',
+      machinePromptStatus: 'YouTube 번역이 제한됨',
+      machinePromptAccept: '이 동영상에서 기계 번역 사용',
+      machinePromptDismiss: '지금은 사용 안 함',
+      sourceOnly: '원문은 사용 가능하지만 번역은 일시적으로 사용할 수 없습니다',
+      rateLimited: '번역이 제한되었습니다. 60초 후 다시 시도합니다',
+      rateLimitedShort: '번역이 제한되었습니다. {seconds}초 후 다시 시도합니다',
+      rateLimitedWithSource: '원문은 사용 가능합니다. YouTube 번역 제한 중이며 {seconds}초 후 다시 시도합니다',
+      loadFailed: '불러오기 실패: ',
+      disabled: '이중 자막 꺼짐',
+      enableDualSubs: '이중 자막 켜기',
+      disableDualSubs: '이중 자막 끄기',
+      unselected: '선택 안 됨'
+    },
+    es: {
+      title: 'Subtítulos dobles',
+      launcher: 'X',
+      reload: 'Recargar',
+      close: 'Ocultar',
+      uiLanguage: 'Idioma de la interfaz',
+      uiLanguageAuto: 'Seguir navegador',
+      sourceTrack: 'Pista original',
+      displayMode: 'Modo de visualización',
+      modeDual: 'Original + traducción',
+      modeSource: 'Solo original',
+      modeTarget: 'Solo traducción',
+      targetLang: 'Idioma destino',
+      targetSearch: 'Buscar idioma',
+      targetSearchPlaceholder: 'Escribe un idioma o código',
+      trackIndex: 'Pista de subtítulos original',
+      styleTitle: 'Estilo de subtítulos',
+      sourceFontSize: 'Tamaño original',
+      targetFontSize: 'Tamaño traducción',
+      lineGap: 'Espacio entre líneas',
+      bottomOffset: 'Posición inferior',
+      fontFamily: 'Fuente',
+      sourceColor: 'Color original',
+      targetColor: 'Color traducción',
+      advancedTitle: 'Avanzado',
+      resetStyle: 'Restablecer estilo',
+      debug: 'debug',
+      fontSystem: 'Predeterminado del sistema',
+      fontMicrosoftYahei: 'Microsoft YaHei',
+      fontSerif: 'Serif',
+      fontMono: 'Monoespaciada',
+      injected: 'Script inyectado',
+      waitingWatchPage: 'Esperando página watch',
+      waitingPlayer: 'Esperando reproductor',
+      waitingTracks: 'Esperando pistas de subtítulos',
+      waitingCues: 'Esperando datos de subtítulos de YouTube',
+      loading: 'Cargando...',
+      targetLoading: 'Cargando traducción {seconds}s',
+      targetLoadingStatus: 'Original visible, traducción cargando',
+      noTrack: 'No hay pistas de subtítulos disponibles',
+      noTrackDetail: 'Este video no tiene pistas de subtítulos disponibles',
+      noCue: 'Esta pista aún no devolvió contenido utilizable',
+      nativeReady: 'Subtítulos dobles activados',
+      nativeTargetFallbackReady: 'Subtítulos dobles activados (traducción desde subtítulos nativos de YouTube)',
+      machineTranslateFallback: 'Priorizar traducción automática',
+      machineTranslateReady: 'Traducción automática prioritaria; YouTube queda como respaldo',
+      machineTranslating: 'Traduciendo automáticamente...',
+      machinePromptStatus: 'La traducción de YouTube está limitada',
+      machinePromptAccept: 'Usar traducción automática en este video',
+      machinePromptDismiss: 'Ahora no',
+      sourceOnly: 'Original disponible; traducción temporalmente no disponible',
+      rateLimited: 'Traducción limitada; reintento en 60 segundos',
+      rateLimitedShort: 'Traducción limitada; reintento en {seconds}s',
+      rateLimitedWithSource: 'Original disponible; YouTube limita la traducción. Reintento en {seconds}s',
+      loadFailed: 'Error al cargar: ',
+      disabled: 'Subtítulos dobles desactivados',
+      enableDualSubs: 'Activar subtítulos dobles',
+      disableDualSubs: 'Desactivar subtítulos dobles',
+      unselected: 'Sin seleccionar'
+    }
   };
+
+  var TEXT = getUiText(DEFAULTS.uiLang);
+  var STATUS_TEXT_KEYS = [
+    'injected',
+    'waitingWatchPage',
+    'waitingPlayer',
+    'waitingTracks',
+    'waitingCues',
+    'loading',
+    'targetLoadingStatus',
+    'noTrackDetail',
+    'noCue',
+    'nativeReady',
+    'nativeTargetFallbackReady',
+    'machineTranslateReady',
+    'sourceOnly',
+    'loadFailed',
+    'disabled'
+  ];
 
   if (window[RUNTIME_KEY] && typeof window[RUNTIME_KEY].destroy === 'function') {
     window[RUNTIME_KEY].destroy('reinject');
@@ -354,6 +693,7 @@
   );
 
   var state = loadSettings();
+  TEXT = getUiText(state.uiLang);
   var logger = createLogger(function () {
     return isDebugEnabled(state);
   });
@@ -407,6 +747,8 @@
       runtimeHealthReloadCount: 0,
       runtimeHealthStatus: 'ok',
       status: '',
+      statusKey: '',
+      statusSuffix: '',
       targetPending: false,
       targetPendingStartedAt: 0,
       targetCueRetryCount: 0,
@@ -485,27 +827,32 @@
       videoEpoch: 0
     };
 
-    var ui = {
-      launcher: null,
-      panel: null,
-      sourceName: null,
-      status: null,
-      displayMode: null,
-      targetSearch: null,
-      targetLang: null,
-      trackIndex: null,
-      sourceFontSize: null,
-      targetFontSize: null,
-      lineGap: null,
-      bottomOffset: null,
-      fontFamily: null,
-      sourceColor: null,
-      targetColor: null,
-      enabledBtn: null,
-      machineTranslateToggle: null,
-      debugToggle: null,
-      debugBox: null
-    };
+    var ui = createEmptyUi();
+
+    function createEmptyUi() {
+      return {
+        launcher: null,
+        panel: null,
+        sourceName: null,
+        status: null,
+        uiLang: null,
+        displayMode: null,
+        targetSearch: null,
+        targetLang: null,
+        trackIndex: null,
+        sourceFontSize: null,
+        targetFontSize: null,
+        lineGap: null,
+        bottomOffset: null,
+        fontFamily: null,
+        sourceColor: null,
+        targetColor: null,
+        enabledBtn: null,
+        machineTranslateToggle: null,
+        debugToggle: null,
+        debugBox: null
+      };
+    }
 
     function boot() {
       setPhase('boot');
@@ -585,7 +932,7 @@
       closeBtn.type = 'button';
       closeBtn.className = 'yds-close-btn';
       closeBtn.textContent = 'x';
-      closeBtn.title = '\u9690\u85CF';
+      closeBtn.title = TEXT.close;
       closeBtn.addEventListener('click', function () {
         state.panelOpen = false;
         saveSettings(state);
@@ -605,6 +952,7 @@
       });
       ui.panel.appendChild(ui.enabledBtn);
 
+      ui.uiLang = createUiLanguageField();
       ui.displayMode = createDisplayModeField();
 
       var sourceLabel = document.createElement('label');
@@ -772,6 +1120,25 @@
       return select;
     }
 
+    function createUiLanguageField() {
+      var row = document.createElement('label');
+      row.textContent = TEXT.uiLanguage;
+
+      var select = document.createElement('select');
+      select.setAttribute('data-yds-control', 'ui-lang');
+      select.addEventListener('change', function () {
+        state.uiLang = normalizeUiLangSetting(select.value);
+        TEXT = getUiText(state.uiLang);
+        localizeCurrentStatus();
+        saveSettings(state);
+        rebuildUi('ui-lang-change');
+      });
+
+      row.appendChild(select);
+      ui.panel.appendChild(row);
+      return select;
+    }
+
     function createNumberRangeField(labelText, stateKey, min, max, step, unit) {
       var row = document.createElement('div');
       row.className = 'yds-field';
@@ -831,7 +1198,7 @@
       FONT_OPTIONS.forEach(function (option) {
         var node = document.createElement('option');
         node.value = option.value;
-        node.textContent = option.label;
+        node.textContent = getFontOptionLabel(option);
         select.appendChild(node);
       });
       select.addEventListener('change', function () {
@@ -920,6 +1287,14 @@
       if (slot && !slot.childNodes.length) slot.remove();
     }
 
+    function rebuildUi(reason) {
+      unmountUi();
+      ui = createEmptyUi();
+      buildUi();
+      mountUi();
+      logger.debug('ui rebuilt', { reason: reason || 'unknown', uiLang: state.uiLang, resolvedUiLang: resolveUiLang(state.uiLang) });
+    }
+
     function ensurePageControlsSlot() {
       var host = getPageControlsHost();
       if (!host) return null;
@@ -953,8 +1328,10 @@
     }
 
     function syncUi() {
+      syncUiLanguageOptions();
       syncTargetLanguageOptions();
       syncSourceTrackOptions();
+      if (ui.uiLang) ui.uiLang.value = normalizeUiLangSetting(state.uiLang);
       if (ui.displayMode) ui.displayMode.value = normalizeDisplayMode(state.displayMode);
       if (ui.targetLang) ui.targetLang.value = state.targetLang;
       if (ui.trackIndex) ui.trackIndex.value = String(state.sourceTrackIndex);
@@ -972,6 +1349,33 @@
         ui.debugBox.hidden = !isDebugEnabled(state);
         ui.debugBox.textContent = formatDebugText();
       }
+    }
+
+    function syncUiLanguageOptions(force) {
+      if (!ui.uiLang) return;
+      var resolved = resolveUiLang('auto');
+      var options = UI_LANGUAGE_OPTIONS.map(function (option) {
+        var label = option.value === 'auto'
+          ? TEXT.uiLanguageAuto + ' (' + getUiLanguageName(resolved) + ')'
+          : getUiLanguageName(option.value);
+        return {
+          value: option.value,
+          label: label
+        };
+      });
+      var signature = options.map(function (option) {
+        return option.value + ':' + option.label;
+      }).join('|');
+      if (!force && ui.uiLang.getAttribute('data-options-signature') === signature) return;
+
+      ui.uiLang.textContent = '';
+      options.forEach(function (option) {
+        var node = document.createElement('option');
+        node.value = option.value;
+        node.textContent = option.label;
+        ui.uiLang.appendChild(node);
+      });
+      ui.uiLang.setAttribute('data-options-signature', signature);
     }
 
     function syncTargetLanguageOptions(force) {
@@ -1199,8 +1603,33 @@
 
     function setStatus(text) {
       app.status = String(text || '');
+      rememberStatusText(app.status);
       syncUi();
       logger.debug('status', { phase: app.phase, text: app.status });
+    }
+
+    function rememberStatusText(text) {
+      var match = findStatusTextMatch(text);
+      app.statusKey = match.key;
+      app.statusSuffix = match.suffix;
+    }
+
+    function localizeCurrentStatus() {
+      if (!app.statusKey || !TEXT[app.statusKey]) return;
+      app.status = TEXT[app.statusKey] + (app.statusSuffix || '');
+    }
+
+    function findStatusTextMatch(text) {
+      var value = String(text || '');
+      var i;
+      for (i = 0; i < STATUS_TEXT_KEYS.length; i++) {
+        var key = STATUS_TEXT_KEYS[i];
+        var template = TEXT[key];
+        if (!template) continue;
+        if (value === template) return { key: key, suffix: '' };
+        if (value.indexOf(template) === 0) return { key: key, suffix: value.slice(template.length) };
+      }
+      return { key: '', suffix: '' };
     }
 
     function setDualSubsEnabled(enabled, reason) {
@@ -1279,6 +1708,7 @@
       var snapshot = collectSnapshot();
       return [
         'version=' + snapshot.version,
+        'ui-lang=' + snapshot.uiLang + ',resolved=' + snapshot.resolvedUiLang,
         'page=' + snapshot.pageType,
         'url=' + snapshot.url,
         'videoId=' + (snapshot.videoId || '-'),
@@ -3544,6 +3974,8 @@
         translationRequest: describeTranslationRequest(),
         translationResult: describeTranslationResult(),
         url: location.href,
+        uiLang: state.uiLang,
+        resolvedUiLang: resolveUiLang(state.uiLang),
         version: SCRIPT_VERSION,
         videoId: getVideoId()
       };
@@ -3696,6 +4128,7 @@
       sourceTrackIndex: normalized.sourceTrackIndex,
       targetLang: normalized.targetLang,
       targetLangBySource: normalized.targetLangBySource,
+      uiLang: normalized.uiLang,
       displayMode: normalized.displayMode,
       sourceFontSize: normalized.sourceFontSize,
       targetFontSize: normalized.targetFontSize,
@@ -3728,6 +4161,7 @@
     output.sourceTrackIndex = Math.max(0, parseInt(output.sourceTrackIndex || '0', 10) || 0);
     output.targetLang = String(explicitTargetLang || defaultTargetLang || DEFAULTS.targetLang).trim() || DEFAULTS.targetLang;
     output.targetLangBySource = normalizeTargetLangBySource(output.targetLangBySource);
+    output.uiLang = normalizeUiLangSetting(output.uiLang);
     output.displayMode = normalizeDisplayMode(output.displayMode);
     output.sourceFontSize = clampNumber(parseFloat(output.sourceFontSize), 16, 56, DEFAULTS.sourceFontSize);
     output.targetFontSize = clampNumber(parseFloat(output.targetFontSize), 16, 56, DEFAULTS.targetFontSize);
@@ -3743,7 +4177,33 @@
     return output;
   }
 
-  function inferDefaultTargetLang() {
+  function normalizeUiLangSetting(value) {
+    var text = String(value || '').trim();
+    var i;
+    if (!text || text === 'auto') return 'auto';
+    for (i = 0; i < UI_LANGUAGE_OPTIONS.length; i++) {
+      if (UI_LANGUAGE_OPTIONS[i].value === text && text !== 'auto') return text;
+    }
+    return 'auto';
+  }
+
+  function resolveUiLang(value) {
+    var setting = normalizeUiLangSetting(value);
+    if (setting !== 'auto') return setting;
+    return inferDefaultUiLang();
+  }
+
+  function inferDefaultUiLang() {
+    var languages = getBrowserLanguageCandidates();
+    var i;
+    for (i = 0; i < languages.length; i++) {
+      var mapped = mapLocaleToUiLanguage(languages[i]);
+      if (mapped) return mapped;
+    }
+    return 'en';
+  }
+
+  function getBrowserLanguageCandidates() {
     var languages = [];
     var i;
     try {
@@ -3753,6 +4213,49 @@
       if (navigator.language) languages.push(navigator.language);
       if (document.documentElement && document.documentElement.lang) languages.push(document.documentElement.lang);
     } catch (err) {}
+    return languages;
+  }
+
+  function mapLocaleToUiLanguage(value) {
+    var lower = String(value || '').trim().toLowerCase();
+    if (!lower) return '';
+    if (lower === 'zh' || lower.indexOf('zh-cn') === 0 || lower.indexOf('zh-sg') === 0 || lower.indexOf('zh-hans') === 0) return 'zh-Hans';
+    if (lower.indexOf('zh-tw') === 0 || lower.indexOf('zh-hk') === 0 || lower.indexOf('zh-mo') === 0 || lower.indexOf('zh-hant') === 0) return 'zh-Hant';
+    if (lower.indexOf('ja') === 0) return 'ja';
+    if (lower.indexOf('ko') === 0) return 'ko';
+    if (lower.indexOf('es') === 0) return 'es';
+    if (lower.indexOf('en') === 0) return 'en';
+    return '';
+  }
+
+  function getUiText(value) {
+    var resolved = resolveUiLang(value);
+    var fallback = TEXT_PACKS['zh-Hans'];
+    var pack = TEXT_PACKS[resolved] || fallback;
+    var output = {};
+    var key;
+    for (key in fallback) output[key] = fallback[key];
+    for (key in pack) output[key] = pack[key];
+    return output;
+  }
+
+  function getUiLanguageName(value) {
+    var resolved = value === 'auto' ? resolveUiLang(value) : normalizeUiLangSetting(value);
+    var i;
+    for (i = 0; i < UI_LANGUAGE_OPTIONS.length; i++) {
+      if (UI_LANGUAGE_OPTIONS[i].value === resolved) return UI_LANGUAGE_OPTIONS[i].label;
+    }
+    return resolved || 'English';
+  }
+
+  function getFontOptionLabel(option) {
+    if (!option) return '';
+    return option.labelKey && TEXT[option.labelKey] ? TEXT[option.labelKey] : option.label;
+  }
+
+  function inferDefaultTargetLang() {
+    var languages = getBrowserLanguageCandidates();
+    var i;
 
     for (i = 0; i < languages.length; i++) {
       var mapped = mapLocaleToTranslationLanguage(languages[i]);

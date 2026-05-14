@@ -330,6 +330,92 @@ test('infers a first-run target language from browser locale', async ({ page }) 
   await expect(page.locator('.yds-native-line-b')).toHaveText('日本語字幕');
 });
 
+test('uses browser language for the UI when set to auto', async ({ page }) => {
+  await setupMockWatch(page, {
+    settings: {
+      uiLang: 'auto'
+    },
+    navigatorLanguages: ['ja-JP', 'en-US'],
+    documentLang: 'ja',
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      {
+        languageCode: 'zh-Hans',
+        languageName: {
+          simpleText: 'Chinese (Simplified)'
+        }
+      }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang')) return json3Cue('翻訳字幕');
+      return json3Cue('English source');
+    }
+  });
+
+  await page.locator('#yds-launcher-root').click();
+  await expect(page.locator('#yds-panel-root strong')).toHaveText('二重字幕');
+  await expect(page.locator('[data-yds-control="ui-lang"]')).toHaveValue('auto');
+  await expect(page.locator('[data-yds-control="display-mode"] option')).toHaveText([
+    '原文 + 翻訳',
+    '原文のみ',
+    '翻訳のみ'
+  ]);
+
+  const state = await snapshot(page);
+  expect(state.uiLang).toBe('auto');
+  expect(state.resolvedUiLang).toBe('ja');
+});
+
+test('lets the user switch the UI language manually', async ({ page }) => {
+  await setupMockWatch(page, {
+    settings: {
+      uiLang: 'zh-Hans'
+    },
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    translationLanguages: [
+      {
+        languageCode: 'zh-Hans',
+        languageName: {
+          simpleText: 'Chinese (Simplified)'
+        }
+      }
+    ],
+    timedText(url) {
+      if (url.searchParams.get('tlang')) return json3Cue('中文字幕');
+      return json3Cue('English source');
+    }
+  });
+
+  await page.locator('#yds-launcher-root').click();
+  await expect(page.locator('#yds-panel-root strong')).toHaveText('双字幕');
+  await expect(page.locator('#yds-panel-root > .yds-status')).toHaveText('双字幕已启用');
+
+  await page.locator('[data-yds-control="ui-lang"]').selectOption('en');
+  await expect(page.locator('#yds-panel-root strong')).toHaveText('Dual Subs');
+  await expect(page.locator('[data-yds-control="ui-lang"]')).toHaveValue('en');
+  await expect(page.locator('#yds-panel-root > .yds-status')).toHaveText('Dual subtitles enabled');
+  await expect(page.locator('[data-yds-control="display-mode"] option')).toHaveText([
+    'Source + translation',
+    'Source only',
+    'Translation only'
+  ]);
+
+  await page.locator('[data-yds-control="ui-lang"]').selectOption('zh-Hant');
+  await expect(page.locator('#yds-panel-root strong')).toHaveText('雙字幕');
+
+  const stored = await page.evaluate(() => JSON.parse(window.localStorage.getItem('__yds_gm__yds_native_settings_v2')));
+  expect(stored.uiLang).toBe('zh-Hant');
+  const state = await snapshot(page);
+  expect(state.uiLang).toBe('zh-Hant');
+  expect(state.resolvedUiLang).toBe('zh-Hant');
+});
+
 test('keeps subtitles above large visible controls in theater-style players', async ({ page }) => {
   await setupMockWatch(page, {
     tracks: [
@@ -1889,5 +1975,7 @@ test('keeps debug API available but unmounts UI outside watch pages', async ({ p
   expect(state.phase).toBe('idle');
   expect(state.dom.launcher).toBe(false);
   expect(state.dom.panel).toBe(false);
-  expect(state.status).toBe('等待 watch 页面');
+  expect(state.status).toBe('Waiting for watch page');
+  expect(state.uiLang).toBe('auto');
+  expect(state.resolvedUiLang).toBe('en');
 });

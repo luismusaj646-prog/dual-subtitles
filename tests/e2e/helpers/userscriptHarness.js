@@ -52,6 +52,25 @@ async function setupMockWatch(page, options = {}) {
   const tracks = options.tracks || [];
   const defaultTrackIndex = typeof options.defaultTrackIndex === 'number' ? options.defaultTrackIndex : -1;
 
+  if (options.navigatorLanguages || options.navigatorLanguage) {
+    await page.addInitScript(({ languages, language }) => {
+      const browserLanguages = Array.isArray(languages) && languages.length
+        ? languages
+        : (language ? [language] : []);
+      Object.defineProperty(navigator, 'languages', {
+        configurable: true,
+        get: () => browserLanguages
+      });
+      Object.defineProperty(navigator, 'language', {
+        configurable: true,
+        get: () => language || browserLanguages[0] || 'en-US'
+      });
+    }, {
+      languages: options.navigatorLanguages || [],
+      language: options.navigatorLanguage || ''
+    });
+  }
+
   await page.route('https://www.youtube.com/watch**', async (route) => {
     const initialTracks = Object.prototype.hasOwnProperty.call(options, 'initialTracks') ? options.initialTracks : tracks;
     await route.fulfill({
@@ -59,6 +78,7 @@ async function setupMockWatch(page, options = {}) {
       contentType: 'text/html; charset=utf-8',
       body: buildWatchHtml({
         defaultTrackIndex,
+        documentLang: options.documentLang,
         nativeTimedTextHintUrl: buildNativeTimedTextHintUrl(initialTracks, options.nativeTimedTextHintParams),
         nativeTimedTextHintAutoRequest: options.nativeTimedTextHintAutoRequest !== false,
         allowNativeHintWait: !!options.allowNativeHintWait,
@@ -207,6 +227,7 @@ async function setupMockWatch(page, options = {}) {
     waitUntil: 'domcontentloaded'
   });
   const defaultSettings = {
+    uiLang: 'zh-Hans',
     machineTranslateFallback: false,
     machineTranslateFallbackUserSet: true
   };
@@ -259,7 +280,7 @@ async function snapshot(page) {
   return page.evaluate(() => window.__ydsDebug && window.__ydsDebug.snapshot());
 }
 
-function buildWatchHtml({ allowNativeHintWait, defaultTrackIndex, nativeCaptionText, nativeMenuSummaryText, nativeMenuTranslatedText, nativeTimedTextHintAutoRequest, nativeTimedTextHintUrl, playerCaptionApi, playerCaptionTracklist, subtitleIgnoreFirstClick, subtitleToggleDelayMs, tracks, translationLanguages, transcriptUiSegments, videoId }) {
+function buildWatchHtml({ allowNativeHintWait, defaultTrackIndex, documentLang, nativeCaptionText, nativeMenuSummaryText, nativeMenuTranslatedText, nativeTimedTextHintAutoRequest, nativeTimedTextHintUrl, playerCaptionApi, playerCaptionTracklist, subtitleIgnoreFirstClick, subtitleToggleDelayMs, tracks, translationLanguages, transcriptUiSegments, videoId }) {
   const playerResponse = JSON.stringify(buildPlayerResponse({
     defaultTrackIndex,
     tracks,
@@ -277,7 +298,7 @@ function buildWatchHtml({ allowNativeHintWait, defaultTrackIndex, nativeCaptionT
   const nativeMenuTranslatedTextJson = JSON.stringify(nativeMenuTranslatedText || '').replace(/</g, '\\u003c');
 
   return `<!doctype html>
-<html lang="en">
+<html lang="${escapeHtml(documentLang || 'en')}">
   <head>
     <meta charset="utf-8">
     <title>Mock YouTube Watch</title>
