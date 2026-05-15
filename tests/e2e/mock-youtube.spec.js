@@ -107,6 +107,71 @@ test('falls back to translated timedtext when a manual target caption track is e
   await expect(page.locator('.yds-native-line-b')).toHaveText('自动翻译兜底');
 });
 
+test('skips dual subtitles when the selected source language already matches the target', async ({ page }) => {
+  let timedTextRequests = 0;
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('zh-Hant', '中文（繁體）')
+    ],
+    defaultTrackIndex: 0,
+    settings: {
+      targetLang: 'zh-Hant'
+    },
+    timedText() {
+      timedTextRequests += 1;
+      return json3Cue('不应该请求字幕');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('source-lang-skipped');
+
+  const state = await snapshot(page);
+  expect(state.enabled).toBe(true);
+  expect(state.cuesA).toBe(0);
+  expect(state.cuesB).toBe(0);
+  expect(state.source).toContain('中文（繁體）');
+  expect(state.sourceLangSkip).toContain('same-target');
+  expect(state.translationRequest).toBe('source-lang-skip');
+  expect(state.translationResult).toBe('skipped');
+  expect(state.nativeCaptionSuppressed).toBe(false);
+  expect(timedTextRequests).toBe(0);
+  await expect(page.locator('#yds-native-window')).toHaveCount(0);
+});
+
+test('lets users configure source languages that should not start dual subtitles by default', async ({ page }) => {
+  let timedTextRequests = 0;
+  await setupMockWatch(page, {
+    tracks: [
+      captionTrack('en', 'English')
+    ],
+    defaultTrackIndex: 0,
+    timedText(url) {
+      timedTextRequests += 1;
+      if (url.searchParams.get('tlang')) return json3Cue('自动译文');
+      return json3Cue('English source');
+    }
+  });
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('ready');
+  const requestsBeforeSkip = timedTextRequests;
+
+  await page.locator('#yds-launcher-root').click();
+  await page.locator('.yds-advanced summary').click();
+  const skipInput = page.locator('[data-yds-control="skip-source-langs"]');
+  await skipInput.fill('en');
+  await skipInput.dispatchEvent('change');
+
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('source-lang-skipped');
+  const state = await snapshot(page);
+  expect(state.skipSourceLangs).toEqual(['en']);
+  expect(state.sourceLangSkip).toContain('user-list');
+  expect(state.fetch.target).toContain('source-lang-skip:user-list');
+  expect(state.cuesA).toBe(0);
+  expect(state.cuesB).toBe(0);
+  expect(timedTextRequests).toBe(requestsBeforeSkip);
+  await expect(page.locator('#yds-native-window')).toHaveCount(0);
+});
+
 test('smooths short cue gaps and supports keyboard shortcuts', async ({ page }) => {
   await setupMockWatch(page, {
     tracks: [

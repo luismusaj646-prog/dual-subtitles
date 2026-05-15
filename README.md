@@ -2,7 +2,7 @@
 
 YouTube 双字幕 Tampermonkey 脚本。
 
-当前版本：`4.2.1`
+当前版本：`4.2.2`
 
 项目地址：https://github.com/luismusaj646-prog/dual-subtitles
 
@@ -13,6 +13,7 @@ YouTube 双字幕 Tampermonkey 脚本。
 - 没有可用人工字幕时，第二行先显示 `translate.googleapis.com` 的逐句机翻。
 - 后台继续运行 4.1 风格的 YouTube 预热、`tlang` 自动翻译和原生 DOM 监听；YouTube 译文稳定可用后平滑接管，机翻继续作为兜底。
 - 自动产生字幕轨会尽量使用同源 ASR 原文和译文，并对轻微错位做吸附对齐。
+- 原字幕语言已经等于目标语言时默认不启动双字幕；也可在高级设置里配置哪些源语言默认跳过。
 - 脚本启用时会压制 YouTube 原生字幕层，减少加载瞬间原生字幕闪现。
 - 字幕层放在 YouTube 播放器里。
 - 面板按钮放在 YouTube 视频下方操作按钮区域。
@@ -67,6 +68,7 @@ https://raw.githubusercontent.com/luismusaj646-prog/dual-subtitles/master/yt-dua
 - “目标语言”来自 YouTube 提供的自动翻译语言列表。
 - “原字幕轨”用于指定第一行来源，第二行仍从这个原轨请求 `tlang`。
 - “界面语言”默认跟随浏览器，也可手动切换为简体中文、繁體中文、English、日本語、한국어、Español。
+- “跳过源语言”在高级设置里，填 `zh, ja, ko` 这类语言代码；命中的是原字幕轨语言，不是人工翻译目标轨。
 - 字体、字号、行间距、底部位置、颜色改完自动保存。
 - 快捷键：`Alt+X` 开关双字幕，`Alt+D` 切换显示模式，`Alt+R` 重载字幕。
 - 首次安装会优先根据浏览器语言推断目标语言；切过的目标语言会按原字幕语言记忆。

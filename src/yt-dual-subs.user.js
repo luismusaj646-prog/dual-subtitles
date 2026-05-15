@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Dual Native Subs
 // @namespace    https://github.com/luismusaj646-prog/dual-subtitles
-// @version      4.2.1
+// @version      4.2.2
 // @description  Native dual subtitles for YouTube
 // @license      GPL-3.0-only
 // @homepageURL  https://github.com/luismusaj646-prog/dual-subtitles
@@ -23,7 +23,7 @@
   'use strict';
 
   var SCRIPT_NAME = 'yt-dual-subs';
-  var SCRIPT_VERSION = '4.2.1';
+  var SCRIPT_VERSION = '4.2.2';
   var SETTINGS_KEY = 'yds_native_settings_v2';
   var RUNTIME_KEY = '__ydsRuntime';
   var DEBUG_API_KEY = '__ydsDebug';
@@ -155,6 +155,7 @@
     fontFamily: 'system',
     smartPosition: true,
     syncNativeStyle: false,
+    skipSourceLangs: [],
     machineTranslateFallback: true,
     machineTranslateFallbackUserSet: false
   };
@@ -198,6 +199,8 @@
     targetSearch: '\u641C\u7D22\u8BED\u8A00',
     targetSearchPlaceholder: '\u8F93\u5165\u8BED\u8A00\u6216\u4EE3\u7801',
     trackIndex: '\u539F\u5B57\u5E55\u8F68',
+    skipSourceLangs: '\u8DF3\u8FC7\u6E90\u8BED\u8A00',
+    skipSourceLangsPlaceholder: 'zh, ja, ko',
     styleTitle: '\u5B57\u5E55\u6837\u5F0F',
     sourceFontSize: '\u539F\u6587\u5B57\u53F7',
     targetFontSize: '\u8BD1\u6587\u5B57\u53F7',
@@ -232,6 +235,8 @@
     machinePromptStatus: 'YouTube \u8BD1\u6587\u53D7\u9650',
     machinePromptAccept: '\u672C\u89C6\u9891\u542F\u7528\u673A\u7FFB',
     machinePromptDismiss: '\u6682\u4E0D\u4F7F\u7528',
+    sourceLangSkippedSameTarget: '\u539F\u5B57\u5E55\u8BED\u8A00\u5DF2\u662F\u76EE\u6807\u8BED\u8A00\uFF0C\u672A\u542F\u52A8\u53CC\u5B57\u5E55',
+    sourceLangSkippedByRule: '\u539F\u5B57\u5E55\u8BED\u8A00 {source} \u5728\u8DF3\u8FC7\u5217\u8868\uFF0C\u672A\u542F\u52A8\u53CC\u5B57\u5E55',
     sourceOnly: '\u539F\u6587\u53EF\u7528\uFF0C\u8BD1\u6587\u6682\u65F6\u4E0D\u53EF\u7528',
     rateLimited: '\u7FFB\u8BD1\u88AB\u9650\u6D41\uFF0C60\u79D2\u540E\u518D\u8BD5',
     rateLimitedShort: '\u7FFB\u8BD1\u88AB\u9650\u6D41\uFF0C{seconds}\u79D2\u540E\u81EA\u52A8\u91CD\u8BD5',
@@ -258,6 +263,8 @@
       targetSearch: '搜尋語言',
       targetSearchPlaceholder: '輸入語言或代碼',
       trackIndex: '原字幕軌',
+      skipSourceLangs: '跳過源語言',
+      skipSourceLangsPlaceholder: 'zh, ja, ko',
       styleTitle: '字幕樣式',
       sourceFontSize: '原文字號',
       targetFontSize: '譯文字號',
@@ -292,6 +299,8 @@
       machinePromptStatus: 'YouTube 譯文受限',
       machinePromptAccept: '本影片啟用機翻',
       machinePromptDismiss: '暫不使用',
+      sourceLangSkippedSameTarget: '原字幕語言已是目標語言，未啟動雙字幕',
+      sourceLangSkippedByRule: '原字幕語言 {source} 在跳過列表，未啟動雙字幕',
       sourceOnly: '原文可用，譯文暫時不可用',
       rateLimited: '翻譯被限流，60 秒後再試',
       rateLimitedShort: '翻譯被限流，{seconds} 秒後自動重試',
@@ -318,6 +327,8 @@
       targetSearch: 'Search language',
       targetSearchPlaceholder: 'Type a language or code',
       trackIndex: 'Source caption track',
+      skipSourceLangs: 'Skip source langs',
+      skipSourceLangsPlaceholder: 'zh, ja, ko',
       styleTitle: 'Subtitle style',
       sourceFontSize: 'Source size',
       targetFontSize: 'Translation size',
@@ -352,6 +363,8 @@
       machinePromptStatus: 'YouTube translation is limited',
       machinePromptAccept: 'Use machine translation for this video',
       machinePromptDismiss: 'Not now',
+      sourceLangSkippedSameTarget: 'Source caption language already matches the target; dual subtitles were not started',
+      sourceLangSkippedByRule: 'Source caption language {source} is in the skip list; dual subtitles were not started',
       sourceOnly: 'Source is available; translation is temporarily unavailable',
       rateLimited: 'Translation is rate limited; trying again in 60 seconds',
       rateLimitedShort: 'Translation is rate limited; retrying in {seconds}s',
@@ -378,6 +391,8 @@
       targetSearch: '言語を検索',
       targetSearchPlaceholder: '言語名またはコードを入力',
       trackIndex: '原文字幕トラック',
+      skipSourceLangs: 'スキップする原文言語',
+      skipSourceLangsPlaceholder: 'zh, ja, ko',
       styleTitle: '字幕スタイル',
       sourceFontSize: '原文サイズ',
       targetFontSize: '翻訳サイズ',
@@ -412,6 +427,8 @@
       machinePromptStatus: 'YouTube 翻訳が制限されています',
       machinePromptAccept: 'この動画で機械翻訳を使う',
       machinePromptDismiss: '今は使わない',
+      sourceLangSkippedSameTarget: '原文字幕の言語が翻訳先と同じため、二重字幕を開始しません',
+      sourceLangSkippedByRule: '原文字幕の言語 {source} はスキップ対象のため、二重字幕を開始しません',
       sourceOnly: '原文は利用可能ですが、翻訳は一時的に利用できません',
       rateLimited: '翻訳が制限されています。60 秒後に再試行します',
       rateLimitedShort: '翻訳が制限されています。{seconds} 秒後に再試行します',
@@ -438,6 +455,8 @@
       targetSearch: '언어 검색',
       targetSearchPlaceholder: '언어 또는 코드 입력',
       trackIndex: '원문 자막 트랙',
+      skipSourceLangs: '건너뛸 원문 언어',
+      skipSourceLangsPlaceholder: 'zh, ja, ko',
       styleTitle: '자막 스타일',
       sourceFontSize: '원문 크기',
       targetFontSize: '번역 크기',
@@ -472,6 +491,8 @@
       machinePromptStatus: 'YouTube 번역이 제한됨',
       machinePromptAccept: '이 동영상에서 기계 번역 사용',
       machinePromptDismiss: '지금은 사용 안 함',
+      sourceLangSkippedSameTarget: '원문 자막 언어가 대상 언어와 같아 이중 자막을 시작하지 않았습니다',
+      sourceLangSkippedByRule: '원문 자막 언어 {source}가 건너뛰기 목록에 있어 이중 자막을 시작하지 않았습니다',
       sourceOnly: '원문은 사용 가능하지만 번역은 일시적으로 사용할 수 없습니다',
       rateLimited: '번역이 제한되었습니다. 60초 후 다시 시도합니다',
       rateLimitedShort: '번역이 제한되었습니다. {seconds}초 후 다시 시도합니다',
@@ -498,6 +519,8 @@
       targetSearch: 'Buscar idioma',
       targetSearchPlaceholder: 'Escribe un idioma o código',
       trackIndex: 'Pista de subtítulos original',
+      skipSourceLangs: 'Omitir idiomas origen',
+      skipSourceLangsPlaceholder: 'zh, ja, ko',
       styleTitle: 'Estilo de subtítulos',
       sourceFontSize: 'Tamaño original',
       targetFontSize: 'Tamaño traducción',
@@ -532,6 +555,8 @@
       machinePromptStatus: 'La traducción de YouTube está limitada',
       machinePromptAccept: 'Usar traducción automática en este video',
       machinePromptDismiss: 'Ahora no',
+      sourceLangSkippedSameTarget: 'El idioma de la pista original ya coincide con el destino; no se iniciaron subtítulos dobles',
+      sourceLangSkippedByRule: 'El idioma original {source} está en la lista omitida; no se iniciaron subtítulos dobles',
       sourceOnly: 'Original disponible; traducción temporalmente no disponible',
       rateLimited: 'Traducción limitada; reintento en 60 segundos',
       rateLimitedShort: 'Traducción limitada; reintento en {seconds}s',
@@ -558,6 +583,8 @@
     'nativeReady',
     'nativeTargetFallbackReady',
     'machineTranslateReady',
+    'sourceLangSkippedSameTarget',
+    'sourceLangSkippedByRule',
     'sourceOnly',
     'loadFailed',
     'disabled'
@@ -809,6 +836,8 @@
       playerApiPrimeOk: false,
       playerApiPrimeRetryCount: 0,
       playerApiPrimeStatus: '',
+      sourceLangSkipStatus: 'off',
+      sourceLangSkipDetail: '',
       translationLanguages: [],
       asrSyncStatus: 'off',
       asrSyncDetail: '',
@@ -846,6 +875,7 @@
         displayMode: null,
         targetSearch: null,
         targetLang: null,
+        skipSourceLangs: null,
         trackIndex: null,
         sourceFontSize: null,
         targetFontSize: null,
@@ -1034,6 +1064,20 @@
       var advancedSummary = document.createElement('summary');
       advancedSummary.textContent = TEXT.advancedTitle;
       advanced.appendChild(advancedSummary);
+
+      var skipSourceLangsLabel = document.createElement('label');
+      skipSourceLangsLabel.textContent = TEXT.skipSourceLangs;
+      ui.skipSourceLangs = document.createElement('input');
+      ui.skipSourceLangs.type = 'text';
+      ui.skipSourceLangs.placeholder = TEXT.skipSourceLangsPlaceholder;
+      ui.skipSourceLangs.setAttribute('data-yds-control', 'skip-source-langs');
+      ui.skipSourceLangs.addEventListener('change', function () {
+        state.skipSourceLangs = normalizeLanguageList(ui.skipSourceLangs.value);
+        saveSettings(state);
+        reloadDualSubsSoon('skip-source-langs-change');
+      });
+      skipSourceLangsLabel.appendChild(ui.skipSourceLangs);
+      advanced.appendChild(skipSourceLangsLabel);
 
       var machineRow = document.createElement('label');
       machineRow.className = 'yds-toggle';
@@ -1342,6 +1386,7 @@
       if (ui.displayMode) ui.displayMode.value = normalizeDisplayMode(state.displayMode);
       if (ui.targetLang) ui.targetLang.value = state.targetLang;
       if (ui.trackIndex) ui.trackIndex.value = String(state.sourceTrackIndex);
+      if (ui.skipSourceLangs && document.activeElement !== ui.skipSourceLangs) ui.skipSourceLangs.value = (state.skipSourceLangs || []).join(', ');
       if (ui.sourceName) ui.sourceName.textContent = app.lastSourceName || TEXT.unselected;
       if (ui.status) ui.status.textContent = app.status;
       if (ui.machineTranslateToggle) {
@@ -1667,6 +1712,7 @@
       clearMachineTranslateFallback();
       clearMachinePromptState();
       clearAsrSyncStatus();
+      resetSourceLangSkipStatus('off');
       stopLoop('disabled');
       clearNativeCaptionWindow({ releaseSuppression: true });
       setPhase('disabled');
@@ -1727,6 +1773,7 @@
         'default-track=' + snapshot.defaultTrackIndex,
         'source=' + (snapshot.source || '-'),
         'source-kind=' + (snapshot.sourceKind || '-'),
+        'source-lang-skip=' + (snapshot.sourceLangSkip || '-'),
         'tracks=' + snapshot.tracks.length,
         'cues=' + snapshot.cuesA + '/' + snapshot.cuesB,
         'target-provider=' + (snapshot.targetProvider || '-') + ':' + (snapshot.targetProviderReason || '-') + ',youtube-ready=' + (snapshot.youtubeTargetReady ? 'yes' : 'no') + ',miss=' + snapshot.youtubeTargetMisses,
@@ -3328,6 +3375,7 @@
       app.pendingLoadKey = '';
       app.translationLanguages = [];
       resetPlayerApiPrimeState();
+      resetSourceLangSkipStatus('off');
       resetRuntimeHealthState('idle');
       setPhase('idle');
       setStatus(TEXT.waitingWatchPage);
@@ -3380,6 +3428,7 @@
       app.pendingLoadKey = '';
       app.translationLanguages = [];
       resetPlayerApiPrimeState();
+      resetSourceLangSkipStatus('off');
       resetRuntimeHealthState('video-reset');
       stopLoop('video-reset');
       clearNativeCaptionWindow();
@@ -3409,6 +3458,22 @@
       app.playerApiPrimeStatus = '';
     }
 
+    function resetSourceLangSkipStatus(reason) {
+      app.sourceLangSkipStatus = reason || 'off';
+      app.sourceLangSkipDetail = '';
+    }
+
+    function formatSourceLangSkipStatus() {
+      if (!app.sourceLangSkipStatus || app.sourceLangSkipStatus === 'off') return 'off';
+      return app.sourceLangSkipDetail ? app.sourceLangSkipStatus + ':' + app.sourceLangSkipDetail : app.sourceLangSkipStatus;
+    }
+
+    function formatSourceLangSkipMessage(skip) {
+      if (!skip || !skip.skip) return '';
+      if (skip.status === 'same-target') return TEXT.sourceLangSkippedSameTarget;
+      return TEXT.sourceLangSkippedByRule.replace('{source}', skip.sourceLang || '-');
+    }
+
     function loadDualSubs(force, reason) {
       if (!isWatchPage()) return;
       if (!state.enabled) {
@@ -3425,6 +3490,7 @@
         clearMachinePromptState();
         clearAsrSyncStatus();
         resetTargetProviderState('disabled');
+        resetSourceLangSkipStatus('off');
         stopLoop('load-disabled');
         clearNativeCaptionWindow({ releaseSuppression: true });
         setPhase('disabled');
@@ -3466,6 +3532,7 @@
       clearMachinePromptState();
       clearAsrSyncStatus();
       resetTargetProviderState(reason || 'load-start');
+      resetSourceLangSkipStatus('off');
 
       ensureCaptionsEnabled(videoId);
       setPhase('load-start');
@@ -3526,6 +3593,32 @@
         app.lastSourceName = formatTrackLabel(selected.track, selected.index);
         app.translationLanguages = getTranslationLanguages(captionData.playerResponse, tracks, selected.track);
         syncUi();
+
+        var sourceSkip = getSourceLanguageSkip(selected.track, state.targetLang, state.skipSourceLangs);
+        if (sourceSkip.skip) {
+          app.loading = false;
+          app.cuesA = [];
+          app.cuesB = [];
+          app.lastCueA = null;
+          app.lastCueB = null;
+          clearTargetPending();
+          clearNativeTargetFallback();
+          resetNativeTranslationTriggerState();
+          clearMachineTranslateFallback();
+          clearMachinePromptState();
+          clearAsrSyncStatus();
+          resetTargetProviderState('source-lang-skip');
+          resetPlayerApiPrimeState();
+          app.sourceLangSkipStatus = sourceSkip.status;
+          app.sourceLangSkipDetail = sourceSkip.sourceLang + (sourceSkip.matched ? '>' + sourceSkip.matched : '');
+          appendFetchDiagnostic('target', 'source-lang-skip:' + formatSourceLangSkipStatus());
+          stopLoop('source-lang-skip');
+          clearNativeCaptionWindow({ releaseSuppression: true });
+          setPhase('source-lang-skipped');
+          setStatus(formatSourceLangSkipMessage(sourceSkip));
+          syncUi();
+          return null;
+        }
 
         var manualTargetTrack = findManualTargetTrack(tracks, state.targetLang, selected.index);
         var cueCacheKey = buildCueCacheKey(videoId, selected.track, state.targetLang, manualTargetTrack);
@@ -3974,6 +4067,8 @@
         playerApiPrimeOk: app.playerApiPrimeOk,
         source: app.lastSourceName,
         sourceKind: describeCaptionTrackKind(app.tracks[state.sourceTrackIndex]),
+        sourceLangSkip: formatSourceLangSkipStatus(),
+        skipSourceLangs: (state.skipSourceLangs || []).slice(),
         status: app.status,
         enabled: state.enabled,
         displayMode: state.displayMode,
@@ -4092,6 +4187,7 @@
     function describeTranslationRequest() {
       var target = fetchDiagnostics.target || '';
       if (!target) return '';
+      if (target.indexOf('source-lang-skip') !== -1) return 'source-lang-skip';
       if (target.indexOf('skip-source-empty') !== -1) return 'skipped-source-empty';
       if (target.indexOf('manual-target') !== -1 && target.indexOf('->') === -1) return 'manual-target';
       if (target.indexOf(':native') !== -1) return 'native';
@@ -4102,6 +4198,7 @@
     function describeTranslationResult() {
       var target = fetchDiagnostics.target || '';
       if (!target) return '';
+      if (target.indexOf('source-lang-skip') !== -1) return 'skipped';
       if (target.indexOf('skip-source-empty') !== -1) return 'skipped';
       if (/ok\(([1-9]\d*),/.test(target)) return 'ok';
       if (target.indexOf('status=429') !== -1) return '429';
@@ -4165,6 +4262,7 @@
       fontFamily: normalized.fontFamily,
       smartPosition: true,
       syncNativeStyle: false,
+      skipSourceLangs: normalized.skipSourceLangs,
       machineTranslateFallback: !!normalized.machineTranslateFallback,
       machineTranslateFallbackUserSet: !!normalized.machineTranslateFallbackUserSet
     });
@@ -4198,6 +4296,7 @@
     output.fontFamily = normalizeFontFamily(output.fontFamily);
     output.smartPosition = true;
     output.syncNativeStyle = false;
+    output.skipSourceLangs = normalizeLanguageList(output.skipSourceLangs);
     output.machineTranslateFallback = !!output.machineTranslateFallback;
     output.machineTranslateFallbackUserSet = !!output.machineTranslateFallbackUserSet;
     return output;
@@ -4311,6 +4410,20 @@
       var source = String(key || '').trim();
       var target = String(value[key] || '').trim();
       if (source && target) output[source] = target;
+    }
+    return output;
+  }
+
+  function normalizeLanguageList(value) {
+    var raw = Array.isArray(value) ? value : String(value || '').split(/[\s,;，、]+/);
+    var seen = {};
+    var output = [];
+    var i;
+    for (i = 0; i < raw.length; i++) {
+      var lang = normalizeLanguageCode(raw[i]);
+      if (!lang || seen[lang]) continue;
+      seen[lang] = true;
+      output.push(lang);
     }
     return output;
   }
@@ -5194,6 +5307,62 @@
     var a = String(left || '').toLowerCase().split('-')[0];
     var b = String(right || '').toLowerCase().split('-')[0];
     return !!a && !!b && a === b;
+  }
+
+  function getSourceLanguageSkip(track, targetLang, skipList) {
+    var sourceLang = getTrackLanguageCode(track);
+    if (!sourceLang) return { skip: false, status: 'off', sourceLang: '', matched: '' };
+
+    if (languageCodesMatchForSkip(sourceLang, targetLang)) {
+      return {
+        skip: true,
+        status: 'same-target',
+        sourceLang: sourceLang,
+        matched: normalizeLanguageCode(targetLang)
+      };
+    }
+
+    skipList = normalizeLanguageList(skipList);
+    var i;
+    for (i = 0; i < skipList.length; i++) {
+      if (languageMatchesSkipEntry(sourceLang, skipList[i])) {
+        return {
+          skip: true,
+          status: 'user-list',
+          sourceLang: sourceLang,
+          matched: skipList[i]
+        };
+      }
+    }
+
+    return { skip: false, status: 'off', sourceLang: sourceLang, matched: '' };
+  }
+
+  function languageMatchesSkipEntry(sourceLang, skipLang) {
+    var source = normalizeLanguageCode(sourceLang);
+    var skip = normalizeLanguageCode(skipLang);
+    if (!source || !skip) return false;
+    if (languageCodesMatchForSkip(source, skip)) return true;
+    if (skip.indexOf('-') === -1) return isSameLanguageFamily(source, skip);
+    return false;
+  }
+
+  function languageCodesMatchForSkip(left, right) {
+    var a = normalizeLanguageIdentity(left);
+    var b = normalizeLanguageIdentity(right);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a === 'zh' || b === 'zh') return isSameLanguageFamily(a, b);
+    return (a.indexOf('-') === -1 || b.indexOf('-') === -1) && isSameLanguageFamily(a, b);
+  }
+
+  function normalizeLanguageIdentity(value) {
+    var lang = normalizeLanguageCode(value);
+    if (!lang) return '';
+    if (lang === 'zh') return 'zh';
+    if (/^zh-(cn|sg|hans)$/.test(lang)) return 'zh-hans';
+    if (/^zh-(tw|hk|mo|hant)$/.test(lang)) return 'zh-hant';
+    return lang;
   }
 
   function canUseDefaultTrackFallback(selectedTrack, fallbackTrack, fallbackIndex, selectedIndex) {
